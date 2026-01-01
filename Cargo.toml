@@ -1,0 +1,20 @@
+[package]
+name = "zk-gatekeeper"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+alloc = { package = "alloc", version = "*" }
+
+sha2 = { version = "0.10", default-features = false }
+hmac = { version = "0.12", default-features = false }
+curve25519-dalek = { version = "4", default-features = false, features = ["fiat_u32_backend", "zeroize"] }
+zeroize = { version = "1.7", default-features = false }
+
+# для RP2040 (позже подключается)
+# rp2040-hal = "0.10"
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
