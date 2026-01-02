@@ -94,13 +94,13 @@ impl ZkProof {
         }
 
         let pk_point = match CompressedEdwardsY(*public_key).decompress() {
-            Some(point) => point,
+            Some(point) if point.is_torsion_free() => point,
             None => return false,
         };
 
         let commitment_bytes = self.commitment();
         let commitment_point = match CompressedEdwardsY(commitment_bytes).decompress() {
-            Some(point) => point,
+            Some(point) if point.is_torsion_free() => point,
             None => return false,
         };
 
@@ -132,7 +132,7 @@ pub(crate) fn transcript_challenge_scalar(
     commitment: &[u8; 32],
 ) -> Scalar {
     let mut hasher = Sha512::new();
-    hasher.update(b"challenge");
+    hasher.update(b"zk-gatekeeper-v1-challenge");
     hash_with_length(&mut hasher, domain);
     hash_with_length(&mut hasher, challenge);
     hasher.update(public_key);

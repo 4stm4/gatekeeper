@@ -33,8 +33,6 @@ pub fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     for (i, limb) in state.iter().enumerate() {
         out[i * 8..(i + 1) * 8].copy_from_slice(&limb.to_bytes());
     }
-    poseidon_permute(&mut state);
-    out[24..32].copy_from_slice(&state[0].to_bytes());
     out
 }
 
@@ -64,14 +62,27 @@ fn poseidon_permute(state: &mut [Goldilocks; STATE_WIDTH]) {
 }
 
 fn pack_bytes(data: &[u8; 32]) -> Goldilocks {
+    if is_canonical(data) {
+        let mut limb = [0u8; 8];
+        limb.copy_from_slice(&data[..8]);
+        return Goldilocks::from_word(u64::from_le_bytes(limb));
+    }
     let mut acc = Goldilocks::zero();
-    let mut chunk = [0u8; 8];
-    for i in 0..4 {
-        let start = i * 8;
-        chunk.copy_from_slice(&data[start..start + 8]);
-        acc = acc.add(Goldilocks::from_word(u64::from_le_bytes(chunk)));
+    let radix = Goldilocks::from_word(256);
+    for &byte in data.iter().rev() {
+        acc = acc.mul(radix);
+        acc = acc.add(Goldilocks::from_word(byte as u64));
     }
     acc
+}
+
+fn is_canonical(data: &[u8; 32]) -> bool {
+    if !data[8..].iter().all(|b| *b == 0) {
+        return false;
+    }
+    let mut limb = [0u8; 8];
+    limb.copy_from_slice(&data[..8]);
+    u64::from_le_bytes(limb) < Goldilocks::MODULUS
 }
 
 #[derive(Clone, Copy)]

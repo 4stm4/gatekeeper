@@ -7,6 +7,9 @@ use sha2::Sha256;
 use crate::error::IdentityError;
 use crate::handshake::CapabilityFlags;
 use crate::identity::types::IdentityIdentifier;
+use crate::platform::secure_vault::{SecureVault, VaultSlot};
+use subtle::ConstantTimeEq;
+use zeroize::{Zeroize, Zeroizing};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -37,23 +40,110 @@ pub struct SecureStore {
     wal_shadow: Vec<WalRecord>,
     wal_dirty: bool,
     cipher: SecureCipher,
-    next_nonce: u32,
+    counter: FlashCounter,
+    wal_nonce: u64,
 }
 
 pub struct WalTransaction {
-    records: Vec<WalRecord>,
+    records: Vec<WalOp>,
 }
 
-#[derive(Clone)]
-enum WalRecord {
+#[derive(Clone, Copy)]
+enum WalOp {
     UpsertRatchet(RatchetStateRow),
     UpsertContact(ContactMetadata),
     DeleteContact(IdentityIdentifier),
 }
 
+#[derive(Clone)]
+enum WalRecord {
+    UpsertRatchet { nonce: u64, ciphertext: [u8; WalRecord::RATCHET_SIZE] },
+    UpsertContact(ContactMetadata),
+    DeleteContact(IdentityIdentifier),
+}
+
+impl WalRecord {
+    const RATCHET_SIZE: usize = core::mem::size_of::<RatchetStateRow>();
+
+    fn encrypt_ratchet(
+        row: &RatchetStateRow,
+        nonce: u64,
+        cipher: &SecureCipher,
+    ) -> Self {
+        let mut buf = Self::encode_ratchet_bytes(row);
+        cipher.xor_keystream(nonce, &mut buf);
+        Self::UpsertRatchet { nonce, ciphertext: buf }
+    }
+
+    fn decrypt_ratchet(&self, cipher: &SecureCipher) -> Option<RatchetStateRow> {
+        match self {
+            WalRecord::UpsertRatchet { nonce, ciphertext } => {
+                let mut buf = *ciphertext;
+                cipher.xor_keystream(*nonce, &mut buf);
+                let row = Self::decode_ratchet_bytes(&buf);
+                buf.zeroize();
+                Some(row)
+            }
+            _ => None,
+        }
+    }
+
+    fn encode_ratchet_bytes(row: &RatchetStateRow) -> [u8; Self::RATCHET_SIZE] {
+        let mut buf = [0u8; Self::RATCHET_SIZE];
+        let mut offset = 0;
+        buf[offset..offset + 32].copy_from_slice(row.identity.as_bytes());
+        offset += 32;
+        buf[offset..offset + 32].copy_from_slice(&row.root_key);
+        offset += 32;
+        buf[offset..offset + 32].copy_from_slice(&row.send_chain);
+        offset += 32;
+        buf[offset..offset + 32].copy_from_slice(&row.recv_chain);
+        offset += 32;
+        buf[offset..offset + 4].copy_from_slice(&row.send_count.to_le_bytes());
+        offset += 4;
+        buf[offset..offset + 4].copy_from_slice(&row.recv_count.to_le_bytes());
+        buf
+    }
+
+    fn decode_ratchet_bytes(buf: &[u8; Self::RATCHET_SIZE]) -> RatchetStateRow {
+        let mut offset = 0;
+        let mut identity = [0u8; 32];
+        identity.copy_from_slice(&buf[offset..offset + 32]);
+        offset += 32;
+        let mut root = [0u8; 32];
+        root.copy_from_slice(&buf[offset..offset + 32]);
+        offset += 32;
+        let mut send_chain = [0u8; 32];
+        send_chain.copy_from_slice(&buf[offset..offset + 32]);
+        offset += 32;
+        let mut recv_chain = [0u8; 32];
+        recv_chain.copy_from_slice(&buf[offset..offset + 32]);
+        offset += 32;
+        let send_count = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap());
+        offset += 4;
+        let recv_count = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap());
+        RatchetStateRow {
+            identity: IdentityIdentifier(identity),
+            root_key: root,
+            send_chain,
+            recv_chain,
+            send_count,
+            recv_count,
+        }
+    }
+}
+
+impl Zeroize for WalRecord {
+    fn zeroize(&mut self) {
+        if let WalRecord::UpsertRatchet { ciphertext, .. } = self {
+            ciphertext.zeroize();
+        }
+    }
+}
+
 pub struct SecureFrame {
     pub interface: SyncInterface,
-    pub nonce: u32,
+    pub nonce: u64,
     pub payload: Vec<u8>,
     pub mac: [u8; 32],
 }
@@ -65,16 +155,65 @@ pub enum SyncInterface {
     Spi = 2,
 }
 
+struct FlashCounter {
+    vault: SecureVault,
+    value: u64,
+}
+
+impl FlashCounter {
+    fn new() -> Result<Self, IdentityError> {
+        let vault = SecureVault::new();
+        let (value, needs_init) = match vault.load_application_secret(VaultSlot::SyncNonceCounter) {
+            Ok(bytes) => {
+                let mut le = [0u8; 8];
+                le.copy_from_slice(&bytes[..8]);
+                (u64::from_le_bytes(le), false)
+            }
+            Err(IdentityError::StorageNotFound) => (0, true),
+            Err(err) => return Err(err),
+        };
+        let counter = Self { vault, value };
+        if needs_init {
+            counter.persist(value)?;
+        }
+        Ok(counter)
+    }
+
+    fn next(&mut self) -> Result<u64, IdentityError> {
+        let next = self
+            .value
+            .checked_add(1)
+            .ok_or(IdentityError::NonceExhausted)?;
+        self.persist(next)?;
+        self.value = next;
+        Ok(next)
+    }
+
+    fn persist(&self, value: u64) -> Result<(), IdentityError> {
+        let mut buf = [0u8; 32];
+        buf[..8].copy_from_slice(&value.to_le_bytes());
+        self.vault
+            .store_application_secret(VaultSlot::SyncNonceCounter, &buf)
+    }
+}
+
 impl SecureStore {
-    pub fn new(encryption_key: [u8; 32], mac_key: [u8; 32]) -> Self {
-        Self {
+    pub fn new(encryption_key: [u8; 32], mac_key: [u8; 32]) -> Result<Self, IdentityError> {
+        Ok(Self {
             ratchets: Vec::new(),
             contacts: Vec::new(),
             wal_shadow: Vec::new(),
             wal_dirty: false,
             cipher: SecureCipher::new(encryption_key, mac_key),
-            next_nonce: 1,
-        }
+            counter: FlashCounter::new()?,
+            wal_nonce: 1,
+        })
+    }
+
+    fn next_wal_nonce(&mut self) -> u64 {
+        let nonce = self.wal_nonce;
+        self.wal_nonce = self.wal_nonce.wrapping_add(1).max(1);
+        nonce
     }
 
     pub fn begin_transaction(&self) -> WalTransaction {
@@ -85,10 +224,9 @@ impl SecureStore {
 
     pub fn recover(&mut self) -> Result<(), IdentityError> {
         if self.wal_dirty {
-            let shadow = self.wal_shadow.clone();
-            self.apply_records(&shadow);
+            self.apply_records(&self.wal_shadow);
             self.wal_dirty = false;
-            self.wal_shadow.clear();
+            self.clear_wal_shadow();
         }
         Ok(())
     }
@@ -97,18 +235,49 @@ impl SecureStore {
         if tx.records.is_empty() {
             return Ok(());
         }
-        self.wal_shadow = tx.records.clone();
+        self.encrypt_wal_ops(&tx.records);
         self.wal_dirty = true;
-        self.apply_records(&tx.records);
+        self.apply_records(&self.wal_shadow);
         self.wal_dirty = false;
-        self.wal_shadow.clear();
+        self.clear_wal_shadow();
         Ok(())
+    }
+
+    fn encrypt_wal_ops(&mut self, ops: &[WalOp]) {
+        self.clear_wal_shadow();
+        for op in ops {
+            match op {
+                WalOp::UpsertRatchet(row) => {
+                    let nonce = self.next_wal_nonce();
+                    self.wal_shadow.push(WalRecord::encrypt_ratchet(
+                        row,
+                        nonce,
+                        &self.cipher,
+                    ));
+                }
+                WalOp::UpsertContact(meta) => {
+                    self.wal_shadow.push(WalRecord::UpsertContact(*meta))
+                }
+                WalOp::DeleteContact(id) => self.wal_shadow.push(WalRecord::DeleteContact(*id)),
+            }
+        }
+    }
+
+    fn clear_wal_shadow(&mut self) {
+        for record in &mut self.wal_shadow {
+            record.zeroize();
+        }
+        self.wal_shadow.clear();
     }
 
     fn apply_records(&mut self, records: &[WalRecord]) {
         for record in records {
             match record {
-                WalRecord::UpsertRatchet(entry) => self.upsert_ratchet_entry(*entry),
+                WalRecord::UpsertRatchet { .. } => {
+                    if let Some(entry) = record.decrypt_ratchet(&self.cipher) {
+                        self.upsert_ratchet_entry(entry);
+                    }
+                }
                 WalRecord::UpsertContact(meta) => self.upsert_contact_entry(*meta),
                 WalRecord::DeleteContact(id) => self.remove_contact_entry(*id),
             }
@@ -149,23 +318,23 @@ impl SecureStore {
         }
     }
 
-    pub fn snapshot(&mut self, interface: SyncInterface) -> SecureFrame {
+    pub fn snapshot(&mut self, interface: SyncInterface) -> Result<SecureFrame, IdentityError> {
         let payload = self.encode_records();
-        let nonce = self.next_nonce;
-        self.next_nonce = self.next_nonce.wrapping_add(1);
-        self.cipher.wrap(interface, nonce, &payload)
+        let nonce = self.counter.next()?;
+        Ok(self.cipher.wrap(interface, nonce, payload.as_slice()))
     }
 
     pub fn apply_sync_frame(&mut self, frame: &SecureFrame) -> Result<(), IdentityError> {
         let plaintext = self.cipher.unwrap(frame)?;
-        let (ratchets, contacts) = decode_records(&plaintext)?;
+        let zeroized = Zeroizing::new(plaintext);
+        let (ratchets, contacts) = decode_records(&zeroized)?;
         self.ratchets = ratchets;
         self.contacts = contacts;
         Ok(())
     }
 
-    fn encode_records(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
+    fn encode_records(&self) -> Zeroizing<Vec<u8>> {
+        let mut buf = Zeroizing::new(Vec::new());
         buf.push(RECORD_VERSION);
 
         let ratchet_len = self.ratchets.len() as u16;
@@ -194,15 +363,15 @@ impl SecureStore {
 
 impl WalTransaction {
     pub fn upsert_ratchet(&mut self, row: RatchetStateRow) {
-        self.records.push(WalRecord::UpsertRatchet(row));
+        self.records.push(WalOp::UpsertRatchet(row));
     }
 
     pub fn upsert_contact(&mut self, meta: ContactMetadata) {
-        self.records.push(WalRecord::UpsertContact(meta));
+        self.records.push(WalOp::UpsertContact(meta));
     }
 
     pub fn delete_contact(&mut self, identity: IdentityIdentifier) {
-        self.records.push(WalRecord::DeleteContact(identity));
+        self.records.push(WalOp::DeleteContact(identity));
     }
 
     pub fn is_empty(&self) -> bool {
@@ -315,9 +484,9 @@ impl SecureCipher {
         Self { enc_key, mac_key }
     }
 
-    pub fn wrap(&self, interface: SyncInterface, nonce: u32, data: &[u8]) -> SecureFrame {
+    pub fn wrap(&self, interface: SyncInterface, nonce: u64, data: &[u8]) -> SecureFrame {
         let mut payload = data.to_vec();
-        self.apply_keystream(nonce, &mut payload);
+        self.xor_keystream(nonce, &mut payload);
         let mac = self.compute_mac(interface, nonce, &payload);
         SecureFrame {
             interface,
@@ -333,25 +502,26 @@ impl SecureCipher {
             return Err(IdentityError::VerificationFailed);
         }
         let mut data = frame.payload.clone();
-        self.apply_keystream(frame.nonce, &mut data);
+        self.xor_keystream(frame.nonce, &mut data);
         Ok(data)
     }
 
-    fn apply_keystream(&self, nonce: u32, data: &mut [u8]) {
+    fn xor_keystream(&self, nonce: u64, data: &mut [u8]) {
         let mut counter = 0u32;
         for chunk in data.chunks_mut(32) {
             let mut mac = HmacSha256::new_from_slice(&self.enc_key).expect("enc key");
             mac.update(&nonce.to_le_bytes());
             mac.update(&counter.to_le_bytes());
-            let block = mac.finalize().into_bytes();
+            let mut block = mac.finalize().into_bytes();
             for (byte, ks) in chunk.iter_mut().zip(block.iter()) {
                 *byte ^= ks;
             }
+            block.zeroize();
             counter = counter.wrapping_add(1);
         }
     }
 
-    fn compute_mac(&self, interface: SyncInterface, nonce: u32, data: &[u8]) -> [u8; 32] {
+    fn compute_mac(&self, interface: SyncInterface, nonce: u64, data: &[u8]) -> [u8; 32] {
         let mut mac = HmacSha256::new_from_slice(&self.mac_key).expect("mac key");
         mac.update(&[interface.as_byte()]);
         mac.update(&nonce.to_le_bytes());
@@ -364,9 +534,5 @@ impl SecureCipher {
 }
 
 fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    let mut diff = 0u8;
-    for i in 0..32 {
-        diff |= a[i] ^ b[i];
-    }
-    diff == 0
+    a.ct_eq(b).unwrap_u8() == 1
 }

@@ -18,7 +18,7 @@ fn main() {
 fn generate_flash_layout() -> Result<(), Box<dyn Error>> {
     let bootloader = parse_env("ZK_BOOTLOADER_BYTES")?.unwrap_or(0x1000);
     let storage_sectors = parse_env("ZK_STORAGE_SECTORS")?.unwrap_or(4);
-    let vault_sectors = parse_env("ZK_SECURE_VAULT_SECTORS")?.unwrap_or(2);
+    let vault_sectors = parse_env("ZK_SECURE_VAULT_SECTORS")?.unwrap_or(3);
     if storage_sectors == 0 {
         return Err("ZK_STORAGE_SECTORS must be > 0".into());
     }

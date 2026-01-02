@@ -38,6 +38,7 @@ const MAX_SLOTS: usize = FLASH_SECURE_VAULT_SECTORS_CFG;
 pub enum VaultSlot {
     IdentitySecret = 0,
     LittleFsMasterKey = 1,
+    SyncNonceCounter = 2,
 }
 
 impl VaultSlot {

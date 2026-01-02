@@ -30,6 +30,7 @@ pub enum IdentityError {
     SecureBootFailure,
     NetworkUnavailable,
     NetworkStackError,
+    NonceExhausted,
     /// Инициализация криптографического примитива завершилась ошибкой.
     #[error("cryptographic backend init failed")]
     CryptoBackend {

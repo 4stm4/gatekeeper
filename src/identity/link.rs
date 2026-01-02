@@ -6,6 +6,7 @@ use crate::identity::keys;
 use crate::identity::types::{
     DeviceId, IdentityIdentifier, IdentityState, RootKey, UserPublicKey, UserSecret,
 };
+use subtle::{Choice, ConstantTimeEq};
 
 /// Полный пакет данных для подключения нового устройства.
 #[derive(Clone)]
@@ -83,10 +84,13 @@ impl<const N: usize> RevocationRegistry<N> {
 
     /// Проверяет флаг отзыва.
     pub fn is_revoked(&self, id: &DeviceId) -> bool {
-        self.ids
-            .iter()
-            .zip(self.used.iter())
-            .any(|(known, used)| *used && known.0 == id.0)
+        let mut hits = Choice::from(0);
+        for (known, used) in self.ids.iter().zip(self.used.iter()) {
+            let eq = known.0.ct_eq(&id.0);
+            let active = Choice::from(*used as u8);
+            hits |= eq & active;
+        }
+        hits.unwrap_u8() != 0
     }
 
     fn position(&self, id: DeviceId) -> Option<usize> {

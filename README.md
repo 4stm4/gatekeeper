@@ -111,7 +111,7 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 ### ZK statement и формат
 
 - ZK-утверждение: «Существует скаляр `sk_user`, такой что `PK = sk_user · G` и `s·G = R + H(domain, challenge, PK, R) · PK`, где `(R, s)` получены от prover». Реализация повторяет детерминированный Schnorr с Fiat–Shamir.
-- Domain separation: все хэши включают префиксы `"nonce"`/`"challenge"` плюс выбранную строку домена (по умолчанию `b"zk-gatekeeper-schnorr-v1"`). Это исключает смешение с другими протоколами.
+- Domain separation: все хэши включают префиксы `"nonce"`/`"zk-gatekeeper-v1-challenge"` плюс выбранную строку домена (по умолчанию `b"zk-gatekeeper-schnorr-v1"`). Это исключает смешение с другими протоколами.
 - Формат `ZkProof` фиксирован и документирован:  
   ```
   struct ProofV1 {
@@ -156,9 +156,9 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
 ## Secure storage & sync
 
-- `storage::secure::SecureStore` — мини-«SQLCipher»: хранит таблицы `RatchetStateRow` и `ContactMetadata`, применяет WAL (`WalTransaction`) перед каждым коммитом и использует `SecureCipher` (HMAC‑SHA256 поток + MAC) для шифрования снимков. При сбое `recover()` переигрывает незавершённый WAL, обеспечивая атомарность.
+- `storage::secure::SecureStore` — мини-«SQLCipher»: хранит таблицы `RatchetStateRow` и `ContactMetadata`, применяет WAL (`WalTransaction`) перед каждым коммитом и использует `SecureCipher` (HMAC‑SHA256 поток + MAC) для шифрования снимков. Все записи WAL маскируются в RAM собственным потоковым ключом, поэтому при power-loss'е в памяти не остаётся открытых `root_key`. При сбое `recover()` переигрывает незавершённый WAL и очищает тени.
 - Структура ratchet-state (`RatchetStateRow`) включает `IdentityIdentifier`, ключи цепочек и счётчики. Метаданные контактов (`ContactMetadata`) содержат `IdentityIdentifier`, capability-флаги, `last_seen_epoch` и уровень доверия; это позволяет хранить контактную книжку в том же журнале.
-- Для синхронизации с мобильным приложением/хостом вызывайте `SecureStore::snapshot(interface)` — он возвращает `SecureFrame { interface, nonce, payload, mac }`, где `interface ∈ {UART, USB, SPI}`. На принимающей стороне `apply_sync_frame` расшифрует и применит снимок; данные передаются через любой транспорт (UART/USB/SPI) без раскрытия содержимого.
+- Для синхронизации с мобильным приложением/хостом вызывайте `SecureStore::snapshot(interface)` — метод возвращает `Result<SecureFrame>`, где `SecureFrame { interface, nonce, payload, mac }` и `nonce` — 64‑битный монотонный счётчик, хранящийся в secure vault (Flash). На принимающей стороне `apply_sync_frame` расшифрует и применит снимок; данные передаются через любой транспорт (UART/USB/SPI) без раскрытия содержимого.
 - Payload — детерминированный бинарный формат (`RECORD_VERSION=1`), совместимый с тестами. Благодаря MAC и одноразовым nonce устройство защищено от подмены/повторов, а структура WAL обеспечивает консистентность даже при power-loss.
 
 ## Storage Access Gate (offline blobs)
