@@ -8,7 +8,7 @@ pub struct UserSecret(pub(crate) [u8; 32]);
 #[derive(Clone, Copy)]
 pub struct DeviceId(pub [u8; 16]);
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct UserPublicKey(pub [u8; 32]);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct IdentityIdentifier(pub [u8; 32]);

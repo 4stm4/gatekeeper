@@ -17,6 +17,7 @@ pub enum IdentityError {
     ChallengeStoreFull,
     InvalidPublicKey,
     VerificationFailed,
+    InvalidSeed,
 }
 
 impl fmt::Display for IdentityError {

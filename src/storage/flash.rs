@@ -6,7 +6,10 @@ use sha2::Sha256;
 
 use crate::error::IdentityError;
 use crate::identity::hkdf::derive_storage_keys;
-use crate::identity::types::{DeviceId, IdentityState, RootKey, UserSecret};
+use crate::identity::keys;
+use crate::identity::types::{
+    DeviceId, IdentityState, RootKey, UserPublicKey, UserSecret,
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -23,7 +26,9 @@ const MAGIC: [u8; 4] = *b"ZKGS";
 const FORMAT_VERSION: u8 = 1;
 
 const HEADER_SIZE: usize = 32;
-const PAYLOAD_SIZE: usize = 32;
+const SECRET_SIZE: usize = 32;
+const PK_SIZE: usize = 32;
+const PAYLOAD_SIZE: usize = SECRET_SIZE + PK_SIZE;
 const MAC_SIZE: usize = 32;
 const RECORD_DATA_SIZE: usize = HEADER_SIZE + PAYLOAD_SIZE;
 const RECORD_TOTAL_SIZE: usize = RECORD_DATA_SIZE + MAC_SIZE;
@@ -47,7 +52,9 @@ impl FlashStorage {
             derive_storage_keys(&state.root_key, &state.device_id)?;
 
         let mut ciphertext = [0u8; PAYLOAD_SIZE];
-        ciphertext.copy_from_slice(&state.sk_user.0);
+        ciphertext[..SECRET_SIZE].copy_from_slice(&state.sk_user.0);
+        let pk_bytes = state.public_key().into_bytes();
+        ciphertext[SECRET_SIZE..PAYLOAD_SIZE].copy_from_slice(&pk_bytes);
         Self::apply_keystream(&enc_key, &state.device_id, counter, &mut ciphertext)?;
 
         let mut header_bytes = [0u8; HEADER_SIZE];
@@ -117,10 +124,26 @@ impl FlashStorage {
 
         Self::apply_keystream(&enc_key, &header.device_id, header.counter, &mut payload)?;
 
+        let mut secret_bytes = [0u8; SECRET_SIZE];
+        secret_bytes.copy_from_slice(&payload[..SECRET_SIZE]);
+        let mut pk_bytes = [0u8; PK_SIZE];
+        pk_bytes.copy_from_slice(&payload[SECRET_SIZE..PAYLOAD_SIZE]);
+
+        let derived_pk = keys::public_key_from_secret(&secret_bytes);
+        if derived_pk != pk_bytes {
+            enc_key.fill(0);
+            mac_key.fill(0);
+            payload.fill(0);
+            expected_mac.fill(0);
+            stored_mac.fill(0);
+            header_bytes.fill(0);
+            secret_bytes.fill(0);
+            pk_bytes.fill(0);
+            return Err(IdentityError::StorageCorrupted);
+        }
+
         let mut root_bytes = [0u8; 32];
         root_bytes.copy_from_slice(&root_key.0);
-        let mut sk = [0u8; 32];
-        sk.copy_from_slice(&payload);
 
         enc_key.fill(0);
         mac_key.fill(0);
@@ -129,10 +152,12 @@ impl FlashStorage {
         stored_mac.fill(0);
         header_bytes.fill(0);
 
+        pk_bytes.fill(0);
+
         Ok(IdentityState {
             root_key: RootKey(root_bytes),
             device_id: header.device_id,
-            sk_user: UserSecret(sk),
+            sk_user: UserSecret(secret_bytes),
         })
     }
 
