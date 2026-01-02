@@ -21,7 +21,7 @@ use subtle::ConstantTimeEq;
 use crate::error::IdentityError;
 use crate::identity::hkdf::derive_storage_keys;
 use crate::identity::keys;
-use crate::identity::types::{DeviceId, IdentityState, RootKey, UserPublicKey, UserSecret};
+use crate::identity::types::{DeviceId, IdentityState, RootKey, UserSecret};
 use crate::platform::device::DeviceBindingKey;
 use crate::platform::rom;
 use crate::platform::secure_boot::FirmwareGuard;
@@ -40,6 +40,8 @@ const FLASH_STORAGE_SECTORS: usize = FLASH_STORAGE_SECTORS_CFG;
 const FLASH_STORAGE_OFFSET: usize = FLASH_STORAGE_OFFSET_CFG;
 const FLASH_STORAGE_SIZE: usize = FLASH_STORAGE_SECTORS * FLASH_SECTOR_SIZE;
 const STORAGE_SLOT_COUNT: usize = FLASH_STORAGE_SECTORS;
+const DATA_SLOT_COUNT: usize = FLASH_STORAGE_SECTORS.saturating_sub(1);
+const WAL_SLOT_INDEX: usize = FLASH_STORAGE_SECTORS.saturating_sub(1);
 const SLOT_SIZE: usize = FLASH_SECTOR_SIZE;
 const FLASH_ERASE_CMD: u8 = 0x20;
 
@@ -53,6 +55,9 @@ const PAYLOAD_SIZE: usize = SECRET_TAG_SIZE + PK_SIZE;
 const MAC_SIZE: usize = 32;
 const RECORD_DATA_SIZE: usize = HEADER_SIZE + PAYLOAD_SIZE;
 const RECORD_TOTAL_SIZE: usize = RECORD_DATA_SIZE + MAC_SIZE;
+const WAL_MAGIC: [u8; 4] = *b"ZGWL";
+const WAL_VERSION: u8 = 1;
+const WAL_HEADER_SIZE: usize = 8;
 
 #[derive(Clone, Copy)]
 struct StoredHeader {
@@ -65,6 +70,11 @@ struct SlotRecord {
     header: StoredHeader,
     header_bytes: [u8; HEADER_SIZE],
     slot: usize,
+}
+
+struct WalEntry {
+    slot: usize,
+    record: [u8; RECORD_TOTAL_SIZE],
 }
 
 impl FlashStorage {
@@ -85,13 +95,17 @@ impl FlashStorage {
 
     /// Сохраняет состояние в зашифрованном виде.
     pub fn seal(&self, state: &IdentityState) -> Result<(), IdentityError> {
+        if DATA_SLOT_COUNT == 0 {
+            return Err(IdentityError::StorageUnavailable);
+        }
+        self.replay_wal()?;
         let latest = self.latest_record()?;
         let existing_counter = latest.as_ref().map(|r| r.header.counter).unwrap_or(0);
         let existing_epoch = latest.as_ref().map(|r| r.header.epoch).unwrap_or(0);
         let (epoch, counter) = Self::advance_counter(existing_epoch, existing_counter)?;
         let target_slot = latest
             .as_ref()
-            .map(|r| (r.slot + 1) % STORAGE_SLOT_COUNT)
+            .map(|r| (r.slot + 1) % DATA_SLOT_COUNT)
             .unwrap_or(0);
         zk_log_info!(
             "Flash seal start: slot={} epoch={} counter={} device={:x?}",
@@ -130,6 +144,7 @@ impl FlashStorage {
         let mut page = [0xFFu8; FLASH_PAGE_SIZE];
         page[..RECORD_TOTAL_SIZE].copy_from_slice(&record);
 
+        self.write_wal(target_slot as u8, &record)?;
         self.program_slot(target_slot, &page)?;
 
         let mut verify = [0u8; RECORD_TOTAL_SIZE];
@@ -153,6 +168,7 @@ impl FlashStorage {
         record.fill(0);
         page.fill(0);
         verify.fill(0);
+        self.clear_wal()?;
         zk_log_debug!("Flash seal complete for slot {}", target_slot);
 
         Ok(())
@@ -160,6 +176,10 @@ impl FlashStorage {
 
     /// Загружает последнее валидное состояние.
     pub fn unseal(&self, root_key: &RootKey) -> Result<IdentityState, IdentityError> {
+        if DATA_SLOT_COUNT == 0 {
+            return Err(IdentityError::StorageUnavailable);
+        }
+        self.replay_wal()?;
         let record = self
             .latest_record()?
             .ok_or(IdentityError::StorageNotFound)?;
@@ -257,7 +277,7 @@ impl FlashStorage {
         let mut best: Option<SlotRecord> = None;
         let mut last_error: Option<IdentityError> = None;
 
-        for slot in 0..STORAGE_SLOT_COUNT {
+        for slot in 0..DATA_SLOT_COUNT {
             let mut header_bytes = [0u8; HEADER_SIZE];
             self.read_slot(slot, 0, &mut header_bytes);
             if Self::is_erased(&header_bytes) {
@@ -435,13 +455,11 @@ impl FlashStorage {
         }
     }
 
-    fn program_slot(&self, slot: usize, page: &[u8; FLASH_PAGE_SIZE]) -> Result<(), IdentityError> {
+    fn erase_slot(&self, slot: usize) {
         debug_assert!(slot < STORAGE_SLOT_COUNT);
         let offset = Self::slot_offset(slot);
         // # Safety
-        // Отключаем XIP и выполняем операции строго в пределах раздела
-        // Gatekeeper. Внешний код сериализует доступ, поэтому ROM API не
-        // вызывается конкурентно.
+        // Стираем ровно один сектор, XIP отключён.
         unsafe {
             rom::connect_internal_flash();
             rom::flash_exit_xip();
@@ -451,6 +469,23 @@ impl FlashStorage {
                 FLASH_SECTOR_SIZE as u32,
                 FLASH_ERASE_CMD,
             );
+            rom::flash_flush_cache();
+            rom::flash_enter_cmd_xip();
+            rom::connect_internal_flash();
+            rom::flash_flush_cache();
+        }
+    }
+
+    fn program_slot(&self, slot: usize, page: &[u8; FLASH_PAGE_SIZE]) -> Result<(), IdentityError> {
+        debug_assert!(slot < STORAGE_SLOT_COUNT);
+        let offset = Self::slot_offset(slot);
+        self.erase_slot(slot);
+        // # Safety
+        // После стирания программируем ровно один сектор/page, XIP выключен,
+        // посторонний код не вызывает ROM API параллельно.
+        unsafe {
+            rom::connect_internal_flash();
+            rom::flash_exit_xip();
             rom::flash_range_program(offset as u32, page.as_ptr(), FLASH_PAGE_SIZE);
             rom::flash_flush_cache();
             rom::flash_enter_cmd_xip();
@@ -462,5 +497,58 @@ impl FlashStorage {
 
     const fn slot_offset(slot: usize) -> usize {
         FLASH_STORAGE_OFFSET + slot * SLOT_SIZE
+    }
+
+    fn read_wal(&self) -> Result<Option<WalEntry>, IdentityError> {
+        if DATA_SLOT_COUNT == 0 {
+            return Ok(None);
+        }
+        let mut buf = [0u8; FLASH_PAGE_SIZE];
+        self.read_slot(WAL_SLOT_INDEX, 0, &mut buf);
+        if Self::is_erased(&buf[..WAL_HEADER_SIZE]) {
+            return Ok(None);
+        }
+        if buf[..4] != WAL_MAGIC || buf[4] != WAL_VERSION {
+            return Err(IdentityError::StorageCorrupted);
+        }
+        let slot = buf[5] as usize;
+        if slot >= DATA_SLOT_COUNT {
+            return Err(IdentityError::StorageCorrupted);
+        }
+        let mut record = [0u8; RECORD_TOTAL_SIZE];
+        record.copy_from_slice(&buf[WAL_HEADER_SIZE..WAL_HEADER_SIZE + RECORD_TOTAL_SIZE]);
+        Ok(Some(WalEntry { slot, record }))
+    }
+
+    fn write_wal(&self, slot: u8, record: &[u8; RECORD_TOTAL_SIZE]) -> Result<(), IdentityError> {
+        if DATA_SLOT_COUNT == 0 {
+            return Err(IdentityError::StorageUnavailable);
+        }
+        let mut page = [0xFFu8; FLASH_PAGE_SIZE];
+        page[..4].copy_from_slice(&WAL_MAGIC);
+        page[4] = WAL_VERSION;
+        page[5] = slot;
+        page[6] = 0;
+        page[7] = 0;
+        page[WAL_HEADER_SIZE..WAL_HEADER_SIZE + RECORD_TOTAL_SIZE].copy_from_slice(record);
+        self.program_slot(WAL_SLOT_INDEX, &page)
+    }
+
+    fn clear_wal(&self) -> Result<(), IdentityError> {
+        if DATA_SLOT_COUNT == 0 {
+            return Ok(());
+        }
+        self.erase_slot(WAL_SLOT_INDEX);
+        Ok(())
+    }
+
+    fn replay_wal(&self) -> Result<(), IdentityError> {
+        if let Some(entry) = self.read_wal()? {
+            let mut page = [0xFFu8; FLASH_PAGE_SIZE];
+            page[..RECORD_TOTAL_SIZE].copy_from_slice(&entry.record);
+            self.program_slot(entry.slot, &page)?;
+            self.clear_wal()?;
+        }
+        Ok(())
     }
 }
