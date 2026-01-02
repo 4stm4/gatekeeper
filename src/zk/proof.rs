@@ -7,7 +7,11 @@ use curve25519_dalek::scalar::Scalar;
 use sha2::{Digest, Sha512};
 use zeroize::Zeroize;
 
-pub const ZK_PROOF_LEN: usize = 64;
+pub const ZK_PROOF_VERSION: u8 = 1;
+pub const ZK_PROOF_HEADER_LEN: usize = 2;
+pub const ZK_COMMITMENT_LEN: usize = 32;
+pub const ZK_RESPONSE_LEN: usize = 32;
+pub const ZK_PROOF_LEN: usize = ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN + ZK_RESPONSE_LEN;
 pub const MAX_CHALLENGE_LEN: usize = 64;
 
 pub struct ZkProof {
@@ -17,13 +21,23 @@ pub struct ZkProof {
 impl ZkProof {
     pub fn new(commitment: [u8; 32], response: [u8; 32]) -> Self {
         let mut bytes = [0u8; ZK_PROOF_LEN];
-        bytes[..32].copy_from_slice(&commitment);
-        bytes[32..].copy_from_slice(&response);
+        bytes[0] = ZK_PROOF_VERSION;
+        bytes[1] = (ZK_COMMITMENT_LEN + ZK_RESPONSE_LEN) as u8;
+        bytes[ZK_PROOF_HEADER_LEN..ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN]
+            .copy_from_slice(&commitment);
+        bytes[ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN..]
+            .copy_from_slice(&response);
         Self { bytes }
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != ZK_PROOF_LEN {
+            return None;
+        }
+        if bytes[0] != ZK_PROOF_VERSION {
+            return None;
+        }
+        if bytes[1] as usize != ZK_COMMITMENT_LEN + ZK_RESPONSE_LEN {
             return None;
         }
         let mut data = [0u8; ZK_PROOF_LEN];
@@ -39,12 +53,20 @@ impl ZkProof {
         self.bytes.to_vec()
     }
 
+    pub fn version(&self) -> u8 {
+        self.bytes[0]
+    }
+
     pub fn commitment(&self) -> [u8; 32] {
-        self.bytes[..32].try_into().unwrap()
+        self.bytes[ZK_PROOF_HEADER_LEN..ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN]
+            .try_into()
+            .unwrap()
     }
 
     pub fn response(&self) -> [u8; 32] {
-        self.bytes[32..].try_into().unwrap()
+        self.bytes[ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN..]
+            .try_into()
+            .unwrap()
     }
 
     pub fn verify(
@@ -53,6 +75,9 @@ impl ZkProof {
         challenge: &[u8],
         public_key: &[u8; 32],
     ) -> bool {
+        if self.version() != ZK_PROOF_VERSION {
+            return false;
+        }
         if challenge.is_empty() || challenge.len() > MAX_CHALLENGE_LEN {
             return false;
         }

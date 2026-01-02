@@ -21,6 +21,12 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - `SeedPhrase::from_root`/`::words` создают мнемонику при «цифровом рождении», `SeedPhrase::from_slice`/`recover_root` — гарантируют детерминированное восстановление и проверку корректности.
 - `init_identity_with_seed` возвращает пару `(IdentityState, SeedPhrase)`, а `recover_identity_from_seed` создаёт состояние для любого `device_id` без обращения к энтропии.
 
+## Энтропия и стойкость
+
+- Источник энтропии `platform::rp2040::Rp2040Entropy` собирает шум сразу из нескольких аппаратных доменов: джиттер ROSC (`ROSC_RANDOMBIT`), дрожание таймера (`timer_raw`) и шум чтения SRAM. Каждый байт строится итеративным смешиванием (XOR/вращения) нескольких выборок, а при недоступности ROSC/таймера возвращается `IdentityError::EntropyUnavailable`.
+- В prove/verify используется синхронная детерминированная схема Schnorr: nonce = H("nonce" || domain || challenge || sk), поэтому RNG не нужен, а повторный challenge даёт тот же proof (контролирует verifier). Все временные скаляры и буферы очищаются `zeroize` (см. `identity::keys`, `zk::prover`, `zk::proof`, `storage::flash`), что исключает утечки через RAM.
+- Код избегает ветвлений по секретным данным: все проверки `if` завязаны только на публичные условия (challenge длина, доступность ROSC, проверка MAC).
+
 ## Защита от повторов (replay)
 
 - **Verifier** обязан генерировать уникальные challenge и регистрировать их перед отправкой (`zk::verifier::ChallengeTracker::register`). После получения proof challenge должен быть потреблён (`Verifier::verify` вызывает `consume`), что блокирует его повторное использование.
@@ -35,13 +41,33 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
 ## Эталонная проверка proof
 
-Минимальный стек проверки находится в `zk::verifier`:
+### ZK statement и формат
 
-1. Инициализируйте `Verifier` с выбранным доменом (`Verifier::new(b"zk-gatekeeper-schnorr-v1")`).
-2. Перед отправкой challenge устройству вызовите `verifier.tracker_mut().register(challenge)` — это зафиксирует одноразовость.
-3. Получив `proof` и `public_key`, вызовите `verifier.verify(&identity_identifier, public_key, challenge, &proof)`.
-   - Функция убедится, что `public_key` соответствует ожидаемому `IdentityIdentifier`.
-   - Challenge будет помечен как использованный; повторные proof с тем же challenge будут отвергнуты (`ReplayDetected`).
-   - `ZkProof::verify` проверит равенство `s·G = R + e·PK`, где `e` — детерминированный транскрипт от домена, challenge, `PK` и `R`.
+- ZK-утверждение: «Существует скаляр `sk_user`, такой что `PK = sk_user · G` и `s·G = R + H(domain, challenge, PK, R) · PK`, где `(R, s)` получены от prover». Реализация повторяет детерминированный Schnorr с Fiat–Shamir.
+- Domain separation: все хэши включают префиксы `"nonce"`/`"challenge"` плюс выбранную строку домена (по умолчанию `b"zk-gatekeeper-schnorr-v1"`). Это исключает смешение с другими протоколами.
+- Формат `ZkProof` фиксирован и документирован:  
+  ```
+  struct ProofV1 {
+      version: u8 = 0x01;
+      payload_len: u8 = 64; // commitment + response
+      commitment: [u8; 32]; // R
+      response:   [u8; 32]; // s
+  }
+  ```
+  Сериализованный размер — 66 байт (`ZK_PROOF_LEN`). `payload_len` проверяется при десериализации, что защищает от усечённых сообщений.
 
-Такой verifier можно портировать на любой хост (ПК, смартфон, другое MCU), и он служит эталоном для тестов совместимости с прошивкой RP2040.
+### Эталонный verifier и host-суместимость
+
+- Минимальный стек проверки находится в `zk::verifier`:  
+  1. `Verifier::new(domain)` фиксирует контекст.  
+  2. `verifier.tracker_mut().register(challenge)` — одноразовость challenge.  
+  3. Получив `(proof, PK, IdentityIdentifier)`, вызывайте `verifier.verify(...)`:  
+     - Проверяется `IdentityIdentifier::matches(PK)`.  
+     - Challenge помечается использованным; повтор вернёт `ReplayDetected`.  
+     - `ZkProof::verify` проверит уравнение Schnorr и версию proof.
+- Этот код не зависит от RP2040 и может компилироваться в любых host-программах (см. `tests/zk.rs`).
+
+### Host-тесты и совместимость
+
+- В `tests/zk.rs` есть два интеграционных теста: `prover_verifier_roundtrip` (проверяет совместимость формата prover ↔ verifier) и `replay_detected` (убеждается, что повтор proof по тому же challenge даёт ошибку).
+- Для проверки совместимости внешних реализаций используйте `ZK_PROOF_VERSION`, `ZK_PROOF_LEN`, `ZK_COMMITMENT_LEN` и `ZK_RESPONSE_LEN` из `zk::proof`. Любое изменение формата потребует обновления версии и тестов.
