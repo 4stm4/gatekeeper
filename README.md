@@ -98,3 +98,39 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - `storage::gate` реализует анонимный доступ к оффлайн-blob’ам: gate выдаёт `BlobFetchChallenge { blob_id, nonce }`, а устройство формирует `BlobFetchRequest` через `BlobIdentityProver`, используя тот же Schnorr-процедурный каркас, но с доменом `b"zk-gatekeeper-blob-v1"` и challenge = `blob_id || nonce`. Identity не раскрывается на транспортном уровне — gate хранит соответствие `(blob_id, IdentityIdentifier, public_key)` и сверяет proof локально.
 - `BlobAccessGate` совместим с P2P-хранилищем (Waku Store и т. п.): запросы содержат минимум метаданных (`blob_id`, `nonce`, `proof`) и могут пересылаться как Waku payload'ы. Gate регистрирует права доступа через `BlobAccessEntry`, делает ревокацию (`revoke`) и возвращает `BlobAccessGrant` при успешной проверке.
 - Для интеграции с Waku: узел публикует `blob_id` в качестве темы (`/zk-gatekeeper/blob/<hex>`) и отвечает на fetch-запросы только при получении валидного `BlobFetchRequest`. Challenge можно распространять по side-channel (например, Waku Request/Response или out-of-band), что предотвращает воспроизведение и минимизирует утечки.
+
+## Форматы и API
+
+- **Flash-record v1**: `magic(4="ZKGS") | version(1) | reserved(1) | payload_len(2=64) | counter(4) | reserved(4) | device_id(16) | ciphertext(64: sk_user || pk_user) | mac(32)` — сериализация из `storage::flash`. Несоответствия версий/длины → `IdentityError::StorageVersionMismatch/StorageCorrupted`.
+- **ZkProof v1**: `version(1) | payload_len(1=64) | commitment(32) | response(32)` (см. `zk::proof`). Любые расширения требуют увеличения `ZK_PROOF_VERSION`.
+- **Public Key**: 32 байта, сжатая точка Ed25519 (`UserPublicKey`). Выдаётся через `IdentityState::public_key()` и используется в verifier/gate.
+- API entrypoints: `identity::{init, seed, link, persist}`, `zk::{prover, verifier}`, `handshake::{initiator_start, responder_accept, ratchet}`, `contacts::ContactTree`, `storage::{flash, secure, gate}`.
+
+## Тесты
+
+### Юнит-тесты
+
+- `tests/identity.rs` – публичный ключ/идентификатор и seed roundtrip.
+- `tests/hkdf.rs` – детерминизм HKDF + независимость storage ключей.
+- `tests/zk.rs` – prover ↔ verifier + replay.
+- `tests/contacts.rs` – Merkle дерево + членство.
+- `tests/storage_gate.rs` – blob gate.
+- `tests/handshake.rs` – Noise handshake и Ratchet.
+
+### Интеграционные сценарии
+
+- Устройство ↔ verifier: `tests/zk.rs::prover_verifier_roundtrip`.
+- Device linking + восстановление: `tests/identity.rs`.
+- Replay атаки: `tests/zk.rs::replay_detected` и `storage::gate::BlobAccessGate::verify`.
+
+Запуск: `cargo test --tests` (host) и `cargo test --target thumbv6m-none-eabi` после установки `thumbv6m-none-eabi`.
+
+## Документация и протоколы
+
+- README описывает форматы (flash-record, proof, handshake), API и workflow. Для диаграмм используйте PlantUML (пример путь `docs/diagrams/handshake.puml`, TODO).
+- `src/lib.rs` экспортирует минимальный API, дополнительные заметки предполагается хранить в `docs/`.
+
+## no_std-аудит и сборка
+
+- Проект `#![no_std]`; зависимости подключены без `std`. Проверяйте `cargo check --no-default-features --target thumbv6m-none-eabi`.
+- Размер и зависимост и: `cargo build --release --target thumbv6m-none-eabi` + `cargo size --target thumbv6m-none-eabi`; `cargo tree --edges no-dev`.
