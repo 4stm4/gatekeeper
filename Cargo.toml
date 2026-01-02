@@ -45,6 +45,7 @@ embassy-demo = ["dep:embassy-executor", "dep:embassy-time", "dep:static_cell", "
 criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }
 stacker = "0.1.22"
 panic-halt = "0.2.0"
+proptest = "1.4"
 
 [[bench]]
 name = "stack_profile"

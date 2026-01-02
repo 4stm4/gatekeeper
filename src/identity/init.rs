@@ -1,3 +1,5 @@
+//! Первичная инициализация и восстановление личности.
+
 use crate::error::IdentityError;
 use crate::identity::entropy::EntropySource;
 use crate::identity::hkdf::derive_user_key;

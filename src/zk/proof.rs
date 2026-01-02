@@ -1,3 +1,5 @@
+//! Сериализуемый формат Schnorr-доказательства (commitment + response) и проверка.
+
 use alloc::vec::Vec;
 use core::convert::TryInto;
 
@@ -7,18 +9,26 @@ use curve25519_dalek::scalar::Scalar;
 use sha2::{Digest, Sha512};
 use zeroize::Zeroize;
 
+/// Текущая версия двоичного формата.
 pub const ZK_PROOF_VERSION: u8 = 1;
+/// Размер заголовка (версия + длина полезной нагрузки).
 pub const ZK_PROOF_HEADER_LEN: usize = 2;
+/// Размер закомпрессированного коммитмента.
 pub const ZK_COMMITMENT_LEN: usize = 32;
+/// Размер скалярного ответа.
 pub const ZK_RESPONSE_LEN: usize = 32;
+/// Полный размер доказательства в байтах.
 pub const ZK_PROOF_LEN: usize = ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN + ZK_RESPONSE_LEN;
+/// Допустимая длина публичного challenge.
 pub const MAX_CHALLENGE_LEN: usize = 64;
 
+/// Минимальное представление Schnorr-доказательства, пригодное для prover/verifier.
 pub struct ZkProof {
     bytes: [u8; ZK_PROOF_LEN],
 }
 
 impl ZkProof {
+    /// Собирает доказательство из коммитмента и ответа.
     pub fn new(commitment: [u8; 32], response: [u8; 32]) -> Self {
         let mut bytes = [0u8; ZK_PROOF_LEN];
         bytes[0] = ZK_PROOF_VERSION;
@@ -29,6 +39,7 @@ impl ZkProof {
         Self { bytes }
     }
 
+    /// Проверяет формат и создаёт структуру из среза.
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != ZK_PROOF_LEN {
             return None;
@@ -44,30 +55,36 @@ impl ZkProof {
         Some(Self { bytes: data })
     }
 
+    /// Возвращает внутреннее представление без копирования.
     pub fn as_bytes(&self) -> &[u8; ZK_PROOF_LEN] {
         &self.bytes
     }
 
+    /// Копирует доказательство в `Vec` для FFI/host API.
     pub fn to_vec(&self) -> Vec<u8> {
         self.bytes.to_vec()
     }
 
+    /// Возвращает версию формата.
     pub fn version(&self) -> u8 {
         self.bytes[0]
     }
 
+    /// Возвращает коммитмент R (compressed Edwards Y).
     pub fn commitment(&self) -> [u8; 32] {
         self.bytes[ZK_PROOF_HEADER_LEN..ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN]
             .try_into()
             .unwrap()
     }
 
+    /// Возвращает ответ `s`.
     pub fn response(&self) -> [u8; 32] {
         self.bytes[ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN..]
             .try_into()
             .unwrap()
     }
 
+    /// Проверяет Schnorr-реляцию относительно домена, challenge и публичного ключа.
     pub fn verify(&self, domain: &[u8], challenge: &[u8], public_key: &[u8; 32]) -> bool {
         if self.version() != ZK_PROOF_VERSION {
             return false;
@@ -107,6 +124,7 @@ impl ZkProof {
     }
 }
 
+/// Вычисляет Fiat-Shamir challenge = H(domain || challenge || pk || commitment).
 pub(crate) fn transcript_challenge_scalar(
     domain: &[u8],
     challenge: &[u8],
@@ -122,6 +140,7 @@ pub(crate) fn transcript_challenge_scalar(
     Scalar::from_hash(hasher)
 }
 
+/// Хэширует данные с префиксом длины (16 бит little-endian).
 pub(crate) fn hash_with_length(hasher: &mut Sha512, data: &[u8]) {
     let len = data.len() as u16;
     hasher.update(len.to_le_bytes());

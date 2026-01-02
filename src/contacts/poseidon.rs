@@ -1,10 +1,14 @@
+//! Poseidon-перестановка в поле Goldilocks для Merkle-дерева контактов.
+
 use subtle::{Choice, ConditionallySelectable};
 
-const WIDTH: usize = 3;
-const ROUNDS: usize = 8;
+/// Размер состояния t=3 (rate=2, capacity=1) для Merkle-хеша.
+const STATE_WIDTH: usize = 3;
+/// Количество полных раундов перестановки (Goldilocks-friendly параметры).
+const FULL_ROUNDS: usize = 8;
 
 // Poseidon over the Goldilocks field (2^64 - 2^32 + 1), alpha = 5.
-const ROUND_CONSTANTS: [[u64; WIDTH]; ROUNDS] = [
+const ROUND_CONSTANTS: [[u64; STATE_WIDTH]; FULL_ROUNDS] = [
     [0x243f6a8885a308d3, 0x13198a2e03707344, 0xa4093822299f31d0],
     [0x082efa98ec4e6c89, 0x452821e638d01377, 0xbe5466cf34e90c6c],
     [0xc0ac29b7c97c50dd, 0x3f84d5b5b5470917, 0x9216d5d98979fb1b],
@@ -15,10 +19,12 @@ const ROUND_CONSTANTS: [[u64; WIDTH]; ROUNDS] = [
     [0xc5d1b023286085f0, 0xca417918b8db38ef, 0x8e79dcb0603a180e],
 ];
 
-const MDS: [[u64; WIDTH]; WIDTH] = [[2, 1, 1], [1, 2, 1], [1, 1, 2]];
+/// MDS-матрица для полного смешивания.
+const MDS: [[u64; STATE_WIDTH]; STATE_WIDTH] = [[2, 1, 1], [1, 2, 1], [1, 1, 2]];
 
+/// Хэширует пару листов в родителя Merkle-дерева.
 pub fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    let mut state = [Goldilocks::zero(); WIDTH];
+    let mut state = [Goldilocks::zero(); STATE_WIDTH];
     state[0] = pack_bytes(left);
     state[1] = pack_bytes(right);
     state[2] = Goldilocks::one();
@@ -32,22 +38,23 @@ pub fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     out
 }
 
+/// Хэширует листовое значение (PK) в формат дерева.
 pub fn hash_leaf(input: &[u8; 32]) -> [u8; 32] {
     hash_pair(input, &EMPTY)
 }
 
 const EMPTY: [u8; 32] = [0u8; 32];
 
-fn poseidon_permute(state: &mut [Goldilocks; WIDTH]) {
-    for r in 0..ROUNDS {
-        for i in 0..WIDTH {
+fn poseidon_permute(state: &mut [Goldilocks; STATE_WIDTH]) {
+    for r in 0..FULL_ROUNDS {
+        for i in 0..STATE_WIDTH {
             state[i] = state[i].add(Goldilocks::from_word(ROUND_CONSTANTS[r][i]));
             state[i] = state[i].pow5();
         }
-        let mut new_state = [Goldilocks::zero(); WIDTH];
-        for i in 0..WIDTH {
+        let mut new_state = [Goldilocks::zero(); STATE_WIDTH];
+        for i in 0..STATE_WIDTH {
             let mut acc = Goldilocks::zero();
-            for j in 0..WIDTH {
+            for j in 0..STATE_WIDTH {
                 acc = acc.add(state[j].mul(Goldilocks::from_word(MDS[i][j])));
             }
             new_state[i] = acc;

@@ -1,3 +1,5 @@
+//! Реализация детерминированного Schnorr prover'а для embedded-окружения.
+
 use crate::error::IdentityError;
 use crate::identity::access::ZkSecretRef;
 
@@ -8,15 +10,19 @@ use curve25519_dalek::scalar::Scalar;
 use sha2::{Digest, Sha512};
 use zeroize::Zeroize;
 
+/// Общий контракт для генераторов ZK-доказательств.
 pub trait ZkProver {
+    /// Вычисляет доказательство знания `sk_user` относительно публичного challenge.
     fn prove(&self, sk: ZkSecretRef<'_>, challenge: &[u8]) -> Result<ZkProof, IdentityError>;
 }
 
+/// Детерминированный Schnorr-prover с домен-разделением.
 pub struct DeterministicSchnorrProver {
     domain: &'static [u8],
 }
 
 impl DeterministicSchnorrProver {
+    /// Создаёт prover с заданным доменом протокола.
     pub const fn new(domain: &'static [u8]) -> Self {
         Self { domain }
     }
@@ -40,6 +46,7 @@ impl Default for DeterministicSchnorrProver {
 }
 
 impl ZkProver for DeterministicSchnorrProver {
+    /// Выполняет детерминированное Schnorr-доказательство без RNG.
     fn prove(&self, sk: ZkSecretRef<'_>, challenge: &[u8]) -> Result<ZkProof, IdentityError> {
         if challenge.is_empty() || challenge.len() > MAX_CHALLENGE_LEN {
             return Err(IdentityError::InvalidChallenge);

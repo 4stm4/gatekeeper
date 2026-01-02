@@ -103,6 +103,9 @@ impl FsStorage for FlashStorageDriver {
         }
         Self::check_bounds(off, buf.len())?;
         let addr = Self::flash_addr(off);
+        // # Safety
+        // Смещение и длина прошли `check_bounds`, следовательно адрес
+        // указывает внутрь раздела LittleFS и чтение `buf.len()` байт легально.
         unsafe {
             ptr::copy_nonoverlapping(addr, buf.as_mut_ptr(), buf.len());
         }
@@ -115,6 +118,9 @@ impl FsStorage for FlashStorageDriver {
         }
         Self::check_bounds(off, data.len())?;
         debug_assert_eq!(data.len() % FLASH_PAGE_SIZE, 0);
+        // # Safety
+        // `check_bounds` гарантирует, что мы программируем только зарезервированный
+        // раздел и соблюдаем размер/выравнивание, ожидаемое ROM API.
         unsafe {
             rom::connect_internal_flash();
             rom::flash_exit_xip();
@@ -135,6 +141,9 @@ impl FsStorage for FlashStorageDriver {
             return Err(FsError::INVALID);
         }
         Self::check_bounds(off, len)?;
+        // # Safety
+        // Границы раздела проверены заранее и кратны размеру сектора, поэтому
+        // ROM API стирает только допустимый диапазон.
         unsafe {
             rom::connect_internal_flash();
             rom::flash_exit_xip();

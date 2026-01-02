@@ -1,3 +1,5 @@
+//! Контроллер Merkle-дерева доверенных контактов и подготовка входов для ZK.
+
 use alloc::vec::Vec;
 
 use crate::error::IdentityError;
@@ -5,10 +7,13 @@ use crate::identity::types::UserPublicKey;
 
 mod poseidon;
 
+/// Глубина бинарного дерева контактов (2^depth листьев).
 pub const CONTACT_TREE_DEPTH: usize = 8;
+/// Максимальное количество контактов, поддерживаемое деревом.
 pub const MAX_CONTACTS: usize = 1 << CONTACT_TREE_DEPTH;
 const EMPTY_LEAF: [u8; 32] = [0u8; 32];
 
+/// Полное состояние дерева контактов с предвычисленным корнем.
 #[derive(Clone)]
 pub struct ContactTree {
     leaves: Vec<[u8; 32]>,
@@ -16,6 +21,7 @@ pub struct ContactTree {
     root: [u8; 32],
 }
 
+/// Свидетельство членства в дереве (для передачи verifier'у).
 pub struct ContactWitness {
     pub leaf: [u8; 32],
     pub siblings: Vec<[u8; 32]>,
@@ -23,6 +29,7 @@ pub struct ContactWitness {
     pub root: [u8; 32],
 }
 
+/// Подготовленные входы для zk-гостя.
 pub struct ZkMembershipInputs {
     pub root: [u8; 32],
     pub leaf: [u8; 32],
@@ -31,6 +38,7 @@ pub struct ZkMembershipInputs {
 }
 
 impl ContactTree {
+    /// Создаёт пустое дерево и вычисляет корень.
     pub fn new() -> Self {
         let leaves = vec![EMPTY_LEAF; MAX_CONTACTS];
         let occupied = vec![false; MAX_CONTACTS];
@@ -43,14 +51,17 @@ impl ContactTree {
         tree
     }
 
+    /// Возвращает текущий корень.
     pub fn root(&self) -> [u8; 32] {
         self.root
     }
 
+    /// Алиас API для совместимости с хранениям.
     pub fn contact_set_root(&self) -> [u8; 32] {
         self.root()
     }
 
+    /// Добавляет публичный ключ в дерево, возвращая ошибку при коллизиях или переполнении.
     pub fn add_contact(&mut self, pk: &UserPublicKey) -> Result<(), IdentityError> {
         let leaf = poseidon::hash_leaf(pk.as_bytes());
         if self.find_leaf(&leaf).is_some() {
@@ -66,6 +77,7 @@ impl ContactTree {
         }
     }
 
+    /// Удаляет существующий контакт.
     pub fn remove_contact(&mut self, pk: &UserPublicKey) -> Result<(), IdentityError> {
         let leaf = poseidon::hash_leaf(pk.as_bytes());
         if let Some(idx) = self.find_leaf(&leaf) {
@@ -78,6 +90,7 @@ impl ContactTree {
         }
     }
 
+    /// Возвращает свидетельство членства для конкретного PK.
     pub fn membership_proof(&self, pk: &UserPublicKey) -> Result<ContactWitness, IdentityError> {
         let leaf = poseidon::hash_leaf(pk.as_bytes());
         let index = self
@@ -93,6 +106,7 @@ impl ContactTree {
         })
     }
 
+    /// Быстрая проверка наличия контакта без построения witness.
     pub fn contains(&self, pk: &UserPublicKey) -> bool {
         let leaf = poseidon::hash_leaf(pk.as_bytes());
         self.find_leaf(&leaf).is_some()
@@ -159,6 +173,7 @@ impl ContactTree {
 }
 
 impl ContactWitness {
+    /// Конвертирует свидетельство в структуру для ZK-гостя.
     pub fn prepare_zk_inputs(&self) -> ZkMembershipInputs {
         ZkMembershipInputs {
             root: self.root,

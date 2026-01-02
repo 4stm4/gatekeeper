@@ -428,6 +428,9 @@ impl FlashStorage {
         debug_assert!(slot < STORAGE_SLOT_COUNT);
         debug_assert!(offset + buf.len() <= SLOT_SIZE);
         let addr = FLASH_BASE + Self::slot_offset(slot) + offset;
+        // # Safety
+        // `slot` и `offset` ограничены объёмом раздела, поэтому адрес всегда
+        // указывает внутрь внутренней Flash и содержит `buf.len()` байт.
         unsafe {
             ptr::copy_nonoverlapping(addr as *const u8, buf.as_mut_ptr(), buf.len());
         }
@@ -436,6 +439,10 @@ impl FlashStorage {
     fn program_slot(&self, slot: usize, page: &[u8; FLASH_PAGE_SIZE]) -> Result<(), IdentityError> {
         debug_assert!(slot < STORAGE_SLOT_COUNT);
         let offset = Self::slot_offset(slot);
+        // # Safety
+        // Отключаем XIP и выполняем операции строго в пределах раздела
+        // Gatekeeper. Внешний код сериализует доступ, поэтому ROM API не
+        // вызывается конкурентно.
         unsafe {
             rom::connect_internal_flash();
             rom::flash_exit_xip();

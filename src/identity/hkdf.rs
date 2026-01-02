@@ -1,3 +1,5 @@
+//! Детерминированные HKDF-производные для ключей устройства и хранения.
+
 use core::cmp::min;
 
 use hmac::{Hmac, Mac};
@@ -8,17 +10,19 @@ use crate::identity::types::{DeviceId, RootKey};
 
 type HkdfHmac = Hmac<Sha256>;
 
-const LABEL_USER: &[u8] = b"zk-gatekeeper-hkdf";
-const LABEL_STORAGE: &[u8] = b"zk-gatekeeper-hkdf";
+const LABEL_USER: &[u8] = b"zk-gatekeeper-user-hkdf";
+const LABEL_STORAGE: &[u8] = b"zk-gatekeeper-storage-hkdf";
 const CONTEXT_USER: &[u8] = b"user-key-v1";
 const CONTEXT_STORAGE: &[u8] = b"storage-key-v1";
 
+/// Выводит 32-байтовый приватный ключ пользователя для конкретного устройства.
 pub fn derive_user_key(root: &RootKey, device: &DeviceId) -> Result<[u8; 32], IdentityError> {
     let mut key = [0u8; 32];
     derive_labeled_material(root, device, LABEL_USER, CONTEXT_USER, &mut key)?;
     Ok(key)
 }
 
+/// Возвращает пару `(enc_key, mac_key)` для зашифрованного хранения состояния.
 pub fn derive_storage_keys(
     root: &RootKey,
     device: &DeviceId,
@@ -34,6 +38,7 @@ pub fn derive_storage_keys(
     Ok((enc, mac))
 }
 
+/// Общий механизм HKDF-Extract + Expand с домен-разделением по label/context.
 fn derive_labeled_material(
     root: &RootKey,
     device: &DeviceId,
@@ -76,6 +81,7 @@ fn derive_labeled_material(
     Ok(())
 }
 
+/// Выполняет HKDF-Extract на основе `device_id` (salt) и `root_key`.
 fn hkdf_extract(root: &RootKey, device: &DeviceId) -> Result<[u8; 32], IdentityError> {
     let mut extract = HkdfHmac::new_from_slice(&device.0)?;
     extract.update(&root.0);
