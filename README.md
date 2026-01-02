@@ -78,3 +78,17 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - Структуры `contacts::ContactTree` и `ContactWitness` управляют списком контактов: добавление (`add_contact`), удаление/отзыв (`remove_contact`), пересчёт корня и генерация доказательства членства. Дублирующиеся контакты запрещены, переполнение выдаёт `IdentityError::ContactListFull`.
 - `contact_set_root()` возвращает текущее значение корня, подходящее для публикации. Оно обновляется при каждом изменении набора.
 - Для ZK-проверки членства используйте `ContactTree::membership_proof`, который возвращает `ContactWitness`. Метод `prepare_zk_inputs()` готовит входные данные для гостя: `(root, leaf, siblings[], path_bits[])`, что соответствует statement «мой `PK` находится в твоём дереве контактов».
+
+## Handshake и Double Ratchet
+
+- После успешного ZK-verify устройства выполняют упрощённый Noise IK-подобный обмен на `x25519`: `handshake::initiator_start` формирует первое сообщение (эпемерный ключ + MAC), `handshake::responder_accept` проверяет MAC, генерирует ответ и вычисляет общий секрет. `initiator_finish` завершается после получения ответа. Оба шага используют лишь публичные данные (domain, capability bits) и `EntropySource` для эпемерных ключей.
+- Формат `HandshakeMessage`: `version (1)` + `capabilities (u32)` + `ephemeral public key (32 байта)` + `mac (32 байта)`. Все MAC считаются как `HMAC-SHA256(shared_secret, "gatekeeper-noise-mac" || capabilities)`, что фиксирует домен.
+- Capability Manager (`handshake::CapabilityFlags/CapabilityManager`) объявляет возможности устройства (VOICE/FILES/TEXT/VIDEO). На выходе обе стороны получают пересечение флагов (например, только VOICE). Эти флаги затем используются при инициализации каналов/функций.
+- Итоговый общий секрет поступает в `handshake::RatchetState`, который разворачивает простую Double-Ratchet обвязку: `RatchetState::new(shared_secret)` → цепочки `send/recv`, обновляемые через HKDF при каждом сообщении (`next_send_key`, `next_recv_key`). Состояние (root key + счётчики) можно сохранять во Flash наряду с другими метаданными.
+
+## Secure storage & sync
+
+- `storage::secure::SecureStore` — мини-«SQLCipher»: хранит таблицы `RatchetStateRow` и `ContactMetadata`, применяет WAL (`WalTransaction`) перед каждым коммитом и использует `SecureCipher` (HMAC‑SHA256 поток + MAC) для шифрования снимков. При сбое `recover()` переигрывает незавершённый WAL, обеспечивая атомарность.
+- Структура ratchet-state (`RatchetStateRow`) включает `IdentityIdentifier`, ключи цепочек и счётчики. Метаданные контактов (`ContactMetadata`) содержат `IdentityIdentifier`, capability-флаги, `last_seen_epoch` и уровень доверия; это позволяет хранить контактную книжку в том же журнале.
+- Для синхронизации с мобильным приложением/хостом вызывайте `SecureStore::snapshot(interface)` — он возвращает `SecureFrame { interface, nonce, payload, mac }`, где `interface ∈ {UART, USB, SPI}`. На принимающей стороне `apply_sync_frame` расшифрует и применит снимок; данные передаются через любой транспорт (UART/USB/SPI) без раскрытия содержимого.
+- Payload — детерминированный бинарный формат (`RECORD_VERSION=1`), совместимый с тестами. Благодаря MAC и одноразовым nonce устройство защищено от подмены/повторов, а структура WAL обеспечивает консистентность даже при power-loss.

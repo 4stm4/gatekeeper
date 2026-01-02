@@ -1,0 +1,17 @@
+*** Begin Patch
+*** Update File: README.md
+@@
+ ## Merkle tree контактов
+ 
+ - Контакты представляются как фиксированное Poseidon-дерево глубины 8 (до 256 контактов). Каждая вершина — Poseidon(`left`,`right`), листья — Poseidon(`PK`,`0`). Пустые листья заполнены нулями, так что `contact_set_root` всегда детерминирован.
+ - Структуры `contacts::ContactTree` и `ContactWitness` управляют списком контактов: добавление (`add_contact`), удаление/отзыв (`remove_contact`), пересчёт корня и генерация доказательства членства. Дублирующиеся контакты запрещены, переполнение выдаёт `IdentityError::ContactListFull`.
+ - `contact_set_root()` возвращает текущее значение корня, подходящее для публикации. Оно обновляется при каждом изменении набора.
+ - Для ZK-проверки членства используйте `ContactTree::membership_proof`, который возвращает `ContactWitness`. Метод `prepare_zk_inputs()` готовит входные данные для гостя: `(root, leaf, siblings[], path_bits[])`, что соответствует statement «мой `PK` находится в твоём дереве контактов».
++
++## Handshake и Double Ratchet
++
++- После успешного ZK-verify устройства выполняют упрощённый Noise IK-подобный обмен на `x25519`: `handshake::initiator_start` формирует первое сообщение (эпемерный ключ + MAC), `handshake::responder_accept` проверяет MAC, генерирует ответ и вычисляет общий секрет. `initiator_finish` завершается после получения ответа. Оба шага используют лишь публичные данные (domain, capability bits) и `EntropySource` для эпемерных ключей.
++- Формат `HandshakeMessage`: `version (1)` + `capabilities (u32)` + `ephemeral public key (32 байта)` + `mac (32 байта)`. Все MAC считаются как `HMAC-SHA256(shared_secret, "gatekeeper-noise-mac" || capabilities)`, что фиксирует домен.
++- Capability Manager (`handshake::CapabilityFlags/CapabilityManager`) объявляет возможности устройства (VOICE/FILES/TEXT/VIDEO). На выходе обе стороны получают пересечение флагов (например, только VOICE). Эти флаги затем используются при инициализации каналов/функций.
++- Итоговый общий секрет поступает в `handshake::RatchetState`, который разворачивает простую Double-Ratchet обвязку: `RatchetState::new(shared_secret)` → цепочки `send/recv`, обновляемые через HKDF при каждом сообщении (`next_send_key`, `next_recv_key`). Состояние (root key + счётчики) можно сохранять во Flash наряду с другими метаданными.
+*** End Patch

@@ -8,3 +8,4 @@ pub mod zk;
 pub mod storage;
 pub mod platform;
 pub mod contacts;
+pub mod handshake;
