@@ -1,7 +1,21 @@
+//! Надёжное хранение состояния личности во Flash с wear-leveling.
+//!
+//! # Пример
+//! ```no_run
+//! use zk_gatekeeper::storage::flash::FlashStorage;
+//! use zk_gatekeeper::identity::types::{DeviceId, IdentityState, RootKey};
+//!
+//! let state = IdentityState::from_root(RootKey([0x11; 32]), DeviceId([1; 16])).unwrap();
+//! let flash = FlashStorage::new();
+//! flash.seal(&state).unwrap();
+//! let restored = flash.unseal(&state.root_key).unwrap();
+//! assert!(restored.identifier().matches(state.public_key().as_bytes()));
+//! ```
 use core::cmp::min;
 use core::ptr;
 
 use hmac::{Hmac, Mac};
+use log::{debug, info, warn};
 use sha2::Sha256;
 
 use crate::error::IdentityError;
@@ -11,18 +25,19 @@ use crate::identity::types::{DeviceId, IdentityState, RootKey, UserPublicKey, Us
 use crate::platform::device::DeviceBindingKey;
 use crate::platform::rom;
 use crate::platform::secure_boot::FirmwareGuard;
+include!(concat!(env!("OUT_DIR"), "/flash_layout.rs"));
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Минимальный драйвер Flash с привязкой к конкретному устройству.
 pub struct FlashStorage;
 
 const FLASH_BASE: usize = 0x1000_0000;
-const FLASH_TOTAL_SIZE: usize = 2 * 1024 * 1024;
 const FLASH_SECTOR_SIZE: usize = 4096;
 const FLASH_PAGE_SIZE: usize = 256;
-const FLASH_STORAGE_SECTORS: usize = 4;
+const FLASH_STORAGE_SECTORS: usize = FLASH_STORAGE_SECTORS_CFG;
+const FLASH_STORAGE_OFFSET: usize = FLASH_STORAGE_OFFSET_CFG;
 const FLASH_STORAGE_SIZE: usize = FLASH_STORAGE_SECTORS * FLASH_SECTOR_SIZE;
-const FLASH_STORAGE_OFFSET: usize = FLASH_TOTAL_SIZE - FLASH_STORAGE_SIZE;
 const STORAGE_SLOT_COUNT: usize = FLASH_STORAGE_SECTORS;
 const SLOT_SIZE: usize = FLASH_SECTOR_SIZE;
 const FLASH_ERASE_CMD: u8 = 0x20;
@@ -51,10 +66,12 @@ struct SlotRecord {
 }
 
 impl FlashStorage {
+    /// Создаёт новый драйвер Flash.
     pub const fn new() -> Self {
         FlashStorage
     }
 
+    /// Восстанавливает состояние с проверкой secure boot.
     pub fn unseal_with_guard(
         &self,
         root_key: &RootKey,
@@ -64,6 +81,7 @@ impl FlashStorage {
         self.unseal(root_key)
     }
 
+    /// Сохраняет состояние в зашифрованном виде.
     pub fn seal(&self, state: &IdentityState) -> Result<(), IdentityError> {
         let latest = self.latest_record()?;
         let existing_counter = latest.as_ref().map(|r| r.header.counter).unwrap_or(0);
@@ -72,6 +90,12 @@ impl FlashStorage {
             .as_ref()
             .map(|r| (r.slot + 1) % STORAGE_SLOT_COUNT)
             .unwrap_or(0);
+        info!(
+            "Flash seal start: slot={} counter={} device={:x?}",
+            target_slot,
+            counter,
+            state.device_id().0
+        );
 
         let (mut enc_key, mut mac_key) = derive_storage_keys(&state.root_key, &state.device_id)?;
         let binding = DeviceBindingKey::new()?;
@@ -102,6 +126,7 @@ impl FlashStorage {
         let mut verify = [0u8; RECORD_TOTAL_SIZE];
         self.read_slot(target_slot, 0, &mut verify);
         if !Self::timing_safe_eq(&verify, &record) {
+            warn!("Flash seal verification mismatch in slot {}", target_slot);
             ciphertext.fill(0);
             enc_key.fill(0);
             mac_key.fill(0);
@@ -119,16 +144,22 @@ impl FlashStorage {
         record.fill(0);
         page.fill(0);
         verify.fill(0);
+        debug!("Flash seal complete for slot {}", target_slot);
 
         Ok(())
     }
 
+    /// Загружает последнее валидное состояние.
     pub fn unseal(&self, root_key: &RootKey) -> Result<IdentityState, IdentityError> {
         let record = self
             .latest_record()?
             .ok_or(IdentityError::StorageNotFound)?;
         let header = record.header;
         let mut header_bytes = record.header_bytes;
+        info!(
+            "Flash unseal: slot={} counter={}",
+            record.slot, header.counter
+        );
 
         let mut payload = [0u8; PAYLOAD_SIZE];
         self.read_slot(record.slot, HEADER_SIZE, &mut payload);
@@ -141,6 +172,10 @@ impl FlashStorage {
         drop(binding);
         let mut expected_mac = Self::compute_mac(&mac_key, &header_bytes, &payload)?;
         if !Self::timing_safe_eq(&stored_mac, &expected_mac) {
+            warn!(
+                "Flash MAC mismatch slot={} counter={}",
+                record.slot, header.counter
+            );
             enc_key.fill(0);
             mac_key.fill(0);
             payload.fill(0);
@@ -214,7 +249,10 @@ impl FlashStorage {
                         });
                     }
                 }
-                Err(err) => last_error = Some(err),
+                Err(err) => {
+                    warn!("Invalid flash header in slot {}: {:?}", slot, err);
+                    last_error = Some(err);
+                }
             }
         }
 
@@ -272,8 +310,7 @@ impl FlashStorage {
         let mut offset = 0usize;
 
         while offset < data.len() {
-            let mut prf =
-                HmacSha256::new_from_slice(enc_key).map_err(|_| IdentityError::DerivationFailed)?;
+            let mut prf = HmacSha256::new_from_slice(enc_key)?;
             prf.update(&device.0);
             prf.update(&counter.to_le_bytes());
             prf.update(&block.to_le_bytes());
@@ -300,8 +337,7 @@ impl FlashStorage {
         header: &[u8],
         payload: &[u8],
     ) -> Result<[u8; 32], IdentityError> {
-        let mut mac =
-            HmacSha256::new_from_slice(mac_key).map_err(|_| IdentityError::DerivationFailed)?;
+        let mut mac = HmacSha256::new_from_slice(mac_key)?;
         mac.update(header);
         mac.update(payload);
         let digest = mac.finalize().into_bytes();

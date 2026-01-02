@@ -4,6 +4,7 @@ use crate::identity::hkdf::derive_user_key;
 use crate::identity::seed::SeedPhrase;
 use crate::identity::types::*;
 
+/// Генерирует новое состояние личности, используя энтропию.
 pub fn init_identity<E: EntropySource>(
     entropy: &mut E,
     device_id: DeviceId,
@@ -20,6 +21,7 @@ pub fn init_identity<E: EntropySource>(
     })
 }
 
+/// Возвращает пару `(IdentityState, SeedPhrase)` для цифрового рождения.
 pub fn init_identity_with_seed<E: EntropySource>(
     entropy: &mut E,
     device_id: DeviceId,
@@ -29,6 +31,7 @@ pub fn init_identity_with_seed<E: EntropySource>(
     Ok((state, seed))
 }
 
+/// Восстанавливает состояние для конкретного `device_id` из seed-фразы.
 pub fn recover_identity_from_seed(
     phrase: &SeedPhrase,
     device_id: DeviceId,

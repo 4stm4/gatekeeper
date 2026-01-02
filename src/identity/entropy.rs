@@ -1,3 +1,22 @@
+//! Абстракции для получения энтропии и их тестовые реализации.
+//!
+//! # Пример
+//! ```
+//! use zk_gatekeeper::identity::entropy::{EntropySource, MockEntropy, FallbackEntropy, PseudoEntropy};
+//! use zk_gatekeeper::error::IdentityError;
+//!
+//! fn fill_random(src: &mut dyn EntropySource) -> Result<[u8; 16], IdentityError> {
+//!     let mut out = [0u8; 16];
+//!     src.fill_bytes(&mut out)?;
+//!     Ok(out)
+//! }
+//!
+//! let primary = MockEntropy::unavailable();
+//! let secondary = PseudoEntropy::new([0x42; 32]);
+//! let mut combined = FallbackEntropy::new(primary, secondary);
+//! let bytes = fill_random(&mut combined).unwrap();
+//! assert_ne!(bytes, [0u8; 16]);
+//! ```
 use core::cmp::min;
 
 use sha2::{Digest, Sha256};
@@ -5,10 +24,12 @@ use zeroize::Zeroize;
 
 use crate::error::IdentityError;
 
+/// Источник энтропии, который умеет заполнять произвольный буфер.
 pub trait EntropySource {
     fn fill_bytes(&mut self, out: &mut [u8]) -> Result<(), IdentityError>;
 }
 
+/// Простая детерминированная энтропия для тестов.
 pub struct DummyEntropy;
 
 impl EntropySource for DummyEntropy {
@@ -20,6 +41,7 @@ impl EntropySource for DummyEntropy {
     }
 }
 
+/// Буферизированный источник, читающий данные из слайса.
 pub struct MockEntropy<'a> {
     data: &'a [u8],
     cursor: usize,
@@ -27,6 +49,7 @@ pub struct MockEntropy<'a> {
 }
 
 impl<'a> MockEntropy<'a> {
+    /// Создаёт источник, циклически читающий `data`.
     pub const fn from_slice(data: &'a [u8]) -> Self {
         Self {
             data,
@@ -35,10 +58,12 @@ impl<'a> MockEntropy<'a> {
         }
     }
 
+    /// Источник, который всегда возвращает `IdentityError::EntropyUnavailable`.
     pub const fn unavailable() -> Self {
         Self::with_error(IdentityError::EntropyUnavailable)
     }
 
+    /// Источник, возвращающий произвольную ошибку.
     pub const fn with_error(error: IdentityError) -> Self {
         Self {
             data: &[],
@@ -67,12 +92,14 @@ impl<'a> EntropySource for MockEntropy<'a> {
     }
 }
 
+/// Псевдослучайный поток на SHA-256, пригодный как fallback.
 pub struct PseudoEntropy {
     state: [u8; 32],
     counter: u64,
 }
 
 impl PseudoEntropy {
+    /// Инициализирует состояние с произвольным seed'ом.
     pub fn new(seed: [u8; 32]) -> Self {
         Self {
             state: seed,
@@ -109,12 +136,14 @@ impl Drop for PseudoEntropy {
     }
 }
 
+/// Обёртка, которая сначала пробует primary-источник, а затем fallback.
 pub struct FallbackEntropy<P, S> {
     primary: P,
     secondary: S,
 }
 
 impl<P, S> FallbackEntropy<P, S> {
+    /// Создаёт failover из двух источников.
     pub const fn new(primary: P, secondary: S) -> Self {
         Self { primary, secondary }
     }

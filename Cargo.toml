@@ -4,12 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-
 sha2 = { version = "0.10", default-features = false }
 hmac = { version = "0.12", default-features = false }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize", "precomputed-tables"] }
 zeroize = { version = "1.7", default-features = false }
 x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"], optional = true }
+log = { version = "0.4", default-features = false }
+thiserror = { version = "1.0", default-features = false }
 
 # для RP2040 (позже подключается)
 # rp2040-hal = "0.10"

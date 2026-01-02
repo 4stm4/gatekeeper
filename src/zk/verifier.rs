@@ -1,3 +1,20 @@
+//! Challenge-трекер и verifier для ZK-доказательств.
+//!
+//! # Пример
+//! ```
+//! use zk_gatekeeper::zk::verifier::{ChallengeTrackerConfig, Verifier};
+//! use zk_gatekeeper::identity::types::{DeviceId, IdentityState, RootKey};
+//! use zk_gatekeeper::zk::prover::{DeterministicSchnorrProver, ZkProver};
+//!
+//! let state = IdentityState::from_root(RootKey([7; 32]), DeviceId([1; 16])).unwrap();
+//! let challenge = b"demo";
+//! let mut verifier = Verifier::new(b"zk-gatekeeper-schnorr-v1", ChallengeTrackerConfig::default());
+//! verifier.tracker_mut().register(challenge, 1).unwrap();
+//! let proof = state.prove_with(&DeterministicSchnorrProver::default(), challenge).unwrap();
+//! let pk = state.public_key().into_bytes();
+//! let id = state.identifier();
+//! verifier.verify(&id, &pk, challenge, 2, &proof).unwrap();
+//! ```
 use alloc::vec::Vec;
 use sha2::{Digest, Sha256};
 
@@ -6,6 +23,7 @@ use crate::identity::types::IdentityIdentifier;
 
 use super::proof::{ZkProof, MAX_CHALLENGE_LEN};
 
+/// Параметры ChallengeTracker (размер + TTL).
 #[derive(Clone, Copy)]
 pub struct ChallengeTrackerConfig {
     pub capacity: usize,
@@ -13,6 +31,7 @@ pub struct ChallengeTrackerConfig {
 }
 
 impl ChallengeTrackerConfig {
+    /// Создаёт конфигурацию с указанными лимитами.
     pub const fn new(capacity: usize, ttl_ticks: u64) -> Self {
         Self {
             capacity,
@@ -33,12 +52,14 @@ struct ChallengeEntry {
     timestamp: u64,
 }
 
+/// Регистрирует и инвалидирует challenge для защиты от replay.
 pub struct ChallengeTracker {
     config: ChallengeTrackerConfig,
     entries: Vec<ChallengeEntry>,
 }
 
 impl ChallengeTracker {
+    /// Создаёт новый трекер.
     pub fn new(config: ChallengeTrackerConfig) -> Self {
         Self {
             entries: Vec::with_capacity(config.capacity.max(1)),
@@ -46,6 +67,7 @@ impl ChallengeTracker {
         }
     }
 
+    /// Регистрирует challenge и момент времени `now`.
     pub fn register(&mut self, challenge: &[u8], now: u64) -> Result<(), IdentityError> {
         self.validate(challenge)?;
         self.purge(now);
@@ -69,6 +91,7 @@ impl ChallengeTracker {
         Ok(())
     }
 
+    /// Помечает challenge использованным.
     pub fn consume(&mut self, challenge: &[u8], now: u64) -> Result<(), IdentityError> {
         self.validate(challenge)?;
         self.purge(now);
@@ -126,6 +149,7 @@ pub struct Verifier<'a> {
 }
 
 impl<'a> Verifier<'a> {
+    /// Создаёт verifier с заданным доменом и параметрами.
     pub fn new(domain: &'a [u8], config: ChallengeTrackerConfig) -> Self {
         Self {
             domain,
@@ -133,10 +157,12 @@ impl<'a> Verifier<'a> {
         }
     }
 
+    /// Возвращает изменяемую ссылку на трекер (регистрация challenge).
     pub fn tracker_mut(&mut self) -> &mut ChallengeTracker {
         &mut self.tracker
     }
 
+    /// Проверяет `proof` относительно идентификатора, публичного ключа и challenge.
     pub fn verify(
         &mut self,
         identity: &IdentityIdentifier,

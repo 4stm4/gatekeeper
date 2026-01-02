@@ -44,8 +44,7 @@ fn derive_labeled_material(
     let mut counter = 1u8;
 
     while generated < out.len() {
-        let mut expand =
-            HkdfHmac::new_from_slice(&prk).map_err(|_| IdentityError::DerivationFailed)?;
+        let mut expand = HkdfHmac::new_from_slice(&prk)?;
 
         if generated != 0 {
             expand.update(&prev);
@@ -74,8 +73,7 @@ fn derive_labeled_material(
 }
 
 fn hkdf_extract(root: &RootKey, device: &DeviceId) -> Result<[u8; 32], IdentityError> {
-    let mut extract =
-        HkdfHmac::new_from_slice(&device.0).map_err(|_| IdentityError::DerivationFailed)?;
+    let mut extract = HkdfHmac::new_from_slice(&device.0)?;
     extract.update(&root.0);
     let prk_ga = extract.finalize().into_bytes();
     let mut prk = [0u8; 32];

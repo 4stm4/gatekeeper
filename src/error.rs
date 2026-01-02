@@ -1,9 +1,14 @@
-use core::fmt;
+use hmac::digest::InvalidLength;
+use thiserror::Error;
 
-#[derive(Debug, Clone, Copy)]
+/// Ошибки верхнего уровня, возникающие во всех подсистемах Gatekeeper.
+#[derive(Debug, Error, Clone, Copy)]
 pub enum IdentityError {
+    /// Аппаратная или программная энтропия недоступна.
     EntropyUnavailable,
+    /// HKDF не смог завершиться.
     DerivationFailed,
+    /// Ошибка внутренняя подсистемы хранения.
     StorageError,
     StorageUnavailable,
     StorageCorrupted,
@@ -11,6 +16,7 @@ pub enum IdentityError {
     StorageVersionMismatch,
     StorageNotFound,
     FlashWriteFailed,
+    /// Переданный challenge некорректен.
     InvalidChallenge,
     ReplayDetected,
     ChallengeNotRegistered,
@@ -22,13 +28,17 @@ pub enum IdentityError {
     ContactNotFound,
     ContactAlreadyExists,
     SecureBootFailure,
+    /// Инициализация криптографического примитива завершилась ошибкой.
+    #[error("cryptographic backend init failed")]
+    CryptoBackend {
+        /// Источник ошибки из криптобиблиотеки.
+        #[source]
+        source: InvalidLength,
+    },
 }
 
-impl fmt::Display for IdentityError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+impl From<InvalidLength> for IdentityError {
+    fn from(source: InvalidLength) -> Self {
+        IdentityError::CryptoBackend { source }
     }
 }
-
-#[cfg(feature = "std")]
-impl std::error::Error for IdentityError {}
