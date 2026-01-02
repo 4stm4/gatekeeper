@@ -184,4 +184,33 @@ impl ContactWitness {
             path_bits: self.path.clone(),
         }
     }
+
+    /// Проверяет, что свернутый путь даёт исходный `root`.
+    pub fn verify(&self) -> bool {
+        verify_membership_path(&self.leaf, &self.siblings, &self.path, &self.root)
+    }
+}
+
+/// Проверяет, что `leaf` принадлежит дереву с корнем `root` и путём `siblings`.
+pub fn verify_membership_path(
+    leaf: &[u8; 32],
+    siblings: &[[u8; 32]],
+    path_bits: &[bool],
+    expected_root: &[u8; 32],
+) -> bool {
+    if siblings.len() != CONTACT_TREE_DEPTH || path_bits.len() != CONTACT_TREE_DEPTH {
+        return false;
+    }
+    let mut acc = *leaf;
+    for (level, (sibling, is_right)) in siblings.iter().zip(path_bits.iter()).enumerate() {
+        acc = if *is_right {
+            poseidon::hash_pair(sibling, &acc)
+        } else {
+            poseidon::hash_pair(&acc, sibling)
+        };
+        if level == CONTACT_TREE_DEPTH - 1 {
+            // nothing special
+        }
+    }
+    acc == *expected_root
 }
