@@ -130,7 +130,7 @@ impl ChallengeTracker {
 
     fn evict_oldest(&mut self) {
         if let Some(entry) = self.entries.pop_front() {
-            log::debug!("ChallengeTracker evicted digest={:x?}", entry.digest);
+            zk_log_debug!("ChallengeTracker evicted digest={:x?}", entry.digest);
         }
     }
 }

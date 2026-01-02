@@ -15,7 +15,6 @@ use core::cmp::min;
 use core::ptr;
 
 use hmac::{Hmac, Mac};
-use log::{debug, info, warn};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
@@ -94,7 +93,7 @@ impl FlashStorage {
             .as_ref()
             .map(|r| (r.slot + 1) % STORAGE_SLOT_COUNT)
             .unwrap_or(0);
-        info!(
+        zk_log_info!(
             "Flash seal start: slot={} epoch={} counter={} device={:x?}",
             target_slot,
             epoch,
@@ -136,7 +135,7 @@ impl FlashStorage {
         let mut verify = [0u8; RECORD_TOTAL_SIZE];
         self.read_slot(target_slot, 0, &mut verify);
         if !Self::timing_safe_eq(&verify, &record) {
-            warn!("Flash seal verification mismatch in slot {}", target_slot);
+            zk_log_warn!("Flash seal verification mismatch in slot {}", target_slot);
             ciphertext.fill(0);
             enc_key.fill(0);
             mac_key.fill(0);
@@ -154,7 +153,7 @@ impl FlashStorage {
         record.fill(0);
         page.fill(0);
         verify.fill(0);
-        debug!("Flash seal complete for slot {}", target_slot);
+        zk_log_debug!("Flash seal complete for slot {}", target_slot);
 
         Ok(())
     }
@@ -166,7 +165,7 @@ impl FlashStorage {
             .ok_or(IdentityError::StorageNotFound)?;
         let header = record.header;
         let mut header_bytes = record.header_bytes;
-        info!(
+        zk_log_info!(
             "Flash unseal: slot={} epoch={} counter={}",
             record.slot, header.epoch, header.counter
         );
@@ -182,7 +181,7 @@ impl FlashStorage {
         drop(binding);
         let mut expected_mac = Self::compute_mac(&mac_key, &header_bytes, &payload)?;
         if !Self::timing_safe_eq(&stored_mac, &expected_mac) {
-            warn!(
+            zk_log_warn!(
                 "Flash MAC mismatch slot={} counter={}",
                 record.slot, header.counter
             );
@@ -284,7 +283,7 @@ impl FlashStorage {
                     }
                 }
                 Err(err) => {
-                    warn!("Invalid flash header in slot {}: {:?}", slot, err);
+                    zk_log_warn!("Invalid flash header in slot {}: {:?}", slot, err);
                     last_error = Some(err);
                 }
             }

@@ -4,15 +4,42 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
 ## Feature flags и контроль зависимостей
 
-- По умолчанию включены флаги `flash-storage`, `secure-storage`, `storage-gate`, `contacts`, `handshake`, `network`. Их можно отключить через `--no-default-features` и включать выборочно:  
+- По умолчанию включены флаги `flash-storage`, `secure-storage`, `storage-gate`, `contacts`, `handshake`, `network`, `logging`. Их можно отключить через `--no-default-features` и включать выборочно:  
   - `flash-storage` — базовый драйвер Flash + `identity::persist`.  
   - `secure-storage` — WAL/SQLCipher‑подобное хранилище.  
   - `storage-gate` — Blob Access Gate.  
   - `contacts` — Merkle дерево контактов.  
   - `handshake` — Noise IK + Double Ratchet (подтягивает опциональный `x25519-dalek`).  
   - `network` — smoltcp-транспорт (Loopback + UDP/TCP и вспомогательные абстракции).  
+  - `logging` — включает макросы логирования (`zk_log_*`), которые проксируют в `log`. При отключении весь вывод вырезается компилятором.
+  - `embedded-alloc` — подключает `embedded_alloc::Heap` как `#[global_allocator]`. Требует вызова `platform::alloc::EmbeddedHeap::init(&mut BUFFER)` из `static mut`-буфера.
 - Все остальные зависимости (`curve25519-dalek`, `sha2`, `hmac`) остаются в ядре, но `curve25519-dalek` собирается с `precomputed_tables`, что уменьшает количество повторных умножений и ускоряет prove()/verify без роста RAM.
 - Для демонстрационных RTIC/Embassy задач предусмотрены опциональные флаги `rtic-demo` и `embassy-demo`, которые добавляют соответствующие зависимости только для примеров.
+
+## Примеры
+
+- `examples/identity_roundtrip.rs`/`zk_roundtrip.rs` — host-примеры с DummyEntropy и печатью proof.
+- `examples/rp2040_basic.rs` — минимальный старт на RP2040: инициализация клоков, запуск `Rp2040Entropy`, генерация личности и (опционально) `FlashStorage::seal`, плюс мигание LED. Сборка:  
+  `cargo run --release --example rp2040_basic --target thumbv6m-none-eabi --features rp2040-hal[,embedded-alloc]`
+- `examples/rtic_tasks.rs`, `examples/embassy_async.rs` скомпилируются только при включении соответствующих флагов (`rtic-demo`/`embassy-demo`).
+
+## Аллокатор для embedded
+
+- Если необходимы `Vec`/`Box` в `#![no_std]` режиме, включите `--features embedded-alloc` и выделите статический буфер:  
+  ```rust,ignore
+  #[cfg(feature = "embedded-alloc")]
+  static mut HEAP: [u8; 32 * 1024] = [0; 32 * 1024];
+
+  #[cfg(feature = "embedded-alloc")]
+  unsafe {
+      zk_gatekeeper::platform::alloc::EmbeddedHeap::init(&mut HEAP);
+  }
+  ```  
+  Без этой инициализации любые вызовы `Vec::push` приведут к panic.
+
+## Модель угроз
+
+- Краткое изложение сценариев, атакующих и мер защиты находится в `docs/threat_model.md`. Документ описывает границы доверия, защиту от физических атак, replay, угрозы Flash и ограничения платформы.
 
 ## Модель личности
 
@@ -69,8 +96,8 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
 ## Логирование
 
-- Критические участки (`storage::flash`, `zk::verifier`) используют `log` (с отключёнными `std`-фичами), поэтому можно подключить будь‑то ITM, RTT или host‑bridge. Макросы `info!` сигнализируют о seal/unseal, `warn!` — о подозрительных ситуациях (MAC mismatch, повреждённый слот), `debug!` — о вспомогательных событиях.
-- Встраиваемые проекты могут предоставить собственный `log::Log` (например, через `defmt` bridge) или оставить журнал пустым — в этом случае макросы оптимизируются.
+- Критические участки (`storage::flash`, `zk::verifier`) используют прокси-макросы `zk_log_info!/warn!/debug!`, которые при включённом флаге `logging` перенаправляются в `log`. Это позволяет подключить ITM/RTT/host-bridge, сохраняя `no_std`.
+- При отключении флага `logging` макросы компилируются в no-op, что уменьшает размер бинарника и исключает зависимость от `log::Log`. Встраиваемые проекты всё равно могут предоставить собственный `log::Log` (например, через `defmt` bridge) и оставить вывод включённым.
 
 ## Физические атаки и secure boot
 

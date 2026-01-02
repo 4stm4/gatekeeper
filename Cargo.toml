@@ -1,6 +1,6 @@
 [package]
 name = "zk-gatekeeper"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -9,7 +9,7 @@ hmac = { version = "0.12", default-features = false }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize", "precomputed-tables"] }
 zeroize = { version = "1.7", default-features = false }
 x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"], optional = true }
-log = { version = "0.4", default-features = false }
+log = { version = "0.4", default-features = false, optional = true }
 thiserror = { version = "1.0", default-features = false }
 subtle = { version = "2.5", default-features = false }
 littlefs2 = { version = "0.6.1", default-features = false, features = ["alloc", "log-none"], optional = true }
@@ -19,6 +19,7 @@ rp2040-hal = { version = "0.10", default-features = false, features = ["rt"], op
 embassy-executor = { version = "0.5.1", default-features = false, features = ["arch-std", "task-arena-size-1024"], optional = true }
 embassy-time = { version = "0.3.2", default-features = false, features = ["std"], optional = true }
 static_cell = { version = "2.1.0", optional = true }
+embedded-alloc = { version = "0.5", optional = true }
 
 # для RP2040 (позже подключается)
 # rp2040-hal = "0.10"
@@ -31,6 +32,7 @@ default = [
     "handshake",
     "secure-storage",
     "storage-gate",
+    "logging",
 ]
 flash-storage = ["dep:littlefs2"]
 network = ["dep:smoltcp"]
@@ -38,6 +40,8 @@ contacts = []
 handshake = ["dep:x25519-dalek"]
 secure-storage = []
 storage-gate = []
+logging = ["dep:log"]
+embedded-alloc = ["dep:embedded-alloc"]
 rtic-demo = ["dep:rtic", "dep:rp2040-hal", "network"]
 embassy-demo = ["dep:embassy-executor", "dep:embassy-time", "dep:static_cell", "network"]
 

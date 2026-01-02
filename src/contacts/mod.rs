@@ -6,6 +6,8 @@ use crate::error::IdentityError;
 use crate::identity::types::UserPublicKey;
 
 mod poseidon;
+/// Переиспользуемые Poseidon-хеши (для бенчмарков/интеграций).
+pub use poseidon::{hash_leaf as poseidon_hash_leaf, hash_pair as poseidon_hash_pair};
 
 /// Глубина бинарного дерева контактов (2^depth листьев).
 pub const CONTACT_TREE_DEPTH: usize = 8;

@@ -7,3 +7,5 @@ pub mod rp2040;
 pub mod secure_boot;
 pub mod secure_vault;
 pub mod stm32;
+#[cfg(feature = "embedded-alloc")]
+pub mod alloc;

@@ -2,6 +2,9 @@
 
 extern crate alloc;
 
+#[macro_use]
+mod logging;
+
 #[cfg(feature = "contacts")]
 pub mod contacts;
 pub mod error;

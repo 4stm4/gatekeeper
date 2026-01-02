@@ -63,7 +63,7 @@ impl LittleFs {
 }
 
 fn map_fs_err(err: FsError) -> IdentityError {
-    log::warn!("LittleFS error: {:?}", err.code());
+    zk_log_warn!("LittleFS error: {:?}", err.code());
     IdentityError::StorageError
 }
 
