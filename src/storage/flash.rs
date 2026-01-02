@@ -17,6 +17,7 @@ use core::ptr;
 use hmac::{Hmac, Mac};
 use log::{debug, info, warn};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 use crate::error::IdentityError;
 use crate::identity::hkdf::derive_storage_keys;
@@ -193,7 +194,7 @@ impl FlashStorage {
         pk_bytes.copy_from_slice(&payload[SECRET_SIZE..PAYLOAD_SIZE]);
 
         let derived_pk = keys::public_key_from_secret(&secret_bytes);
-        if derived_pk != pk_bytes {
+        if derived_pk.ct_eq(&pk_bytes).unwrap_u8() != 1 {
             enc_key.fill(0);
             mac_key.fill(0);
             payload.fill(0);

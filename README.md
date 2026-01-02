@@ -24,6 +24,7 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - Базовая модель: один `root_key`, разные `device_id`, разные `sk_device = HKDF(root_key, device_id)`. API `IdentityState::from_root` и `DeviceEnrollment::from_root` позволяют восстановить/создать состояние для нового устройства, не раскрывая `root_key` третьим сторонам.
 - `IdentityState::enroll_device` генерирует пакет с `sk_device`, `pk_device` и `identity_identifier`, готовый к передаче новому устройству (по защищённому каналу).
 - `RevocationRegistry` предоставляет минимальный механизм отзыва устройств: регистрация `device_id`, проверка `is_revoked` и явная ошибка при переполнении списка.
+- Все HKDF-вызовы используют явные контекстные строки (`hkdf:user-key-v1`, `hkdf:storage-key-v1`), поэтому материалы для identity и storage никак не пересекаются даже при одинаковых `root_key`/`device_id`.
 
 ## Seed-фраза и восстановление
 
@@ -37,6 +38,7 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - Для тестирования и failover добавлены `identity::entropy::{MockEntropy, PseudoEntropy, FallbackEntropy}`: `MockEntropy` детерминированно воспроизводит буфер и может эмулировать полный отказ источника, `PseudoEntropy` — лёгкий потоковый ГПСЧ на SHA-256 (без heap), а `FallbackEntropy` автоматически переключается на него при `EntropyUnavailable`. Это покрывается `tests/entropy.rs`.
 - В prove/verify используется синхронная детерминированная схема Schnorr: nonce = H("nonce" || domain || challenge || sk), поэтому RNG не нужен, а повторный challenge даёт тот же proof (контролирует verifier). Все временные скаляры и буферы очищаются `zeroize` (см. `identity::keys`, `zk::prover`, `zk::proof`, `storage::flash`), что исключает утечки через RAM.
 - Код избегает ветвлений по секретным данным: все проверки `if` завязаны только на публичные условия (challenge длина, доступность ROSC, проверка MAC).
+- Поле Goldilocks для Poseidon, сравнение `derived_pk` и прочие операции с ключами выполняются в постоянное время (`subtle`, `Scalar::mul_add`), поэтому тайминговые атаки на `sk_user` и производные ключи бессмысленны.
 
 ## Защита от повторов (replay)
 
@@ -98,6 +100,7 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 ## Merkle tree контактов
 
 - Контакты представляются как фиксированное Poseidon-дерево глубины 8 (до 256 контактов). Каждая вершина — Poseidon(`left`,`right`), листья — Poseidon(`PK`,`0`). Пустые листья заполнены нулями, так что `contact_set_root` всегда детерминирован.
+- Хеш-функция — Poseidon2 над полем Goldilocks (`p = 2^64 - 2^32 + 1`, α = 5, ширина 3) с константами, пригодными для Plonky2/STARK цепочек. Благодаря этому Merkle-путь может напрямую использоваться в ZK-гостях.
 - Структуры `contacts::ContactTree` и `ContactWitness` управляют списком контактов: добавление (`add_contact`), удаление/отзыв (`remove_contact`), пересчёт корня и генерация доказательства членства. Дублирующиеся контакты запрещены, переполнение выдаёт `IdentityError::ContactListFull`.
 - `contact_set_root()` возвращает текущее значение корня, подходящее для публикации. Оно обновляется при каждом изменении набора.
 - Для ZK-проверки членства используйте `ContactTree::membership_proof`, который возвращает `ContactWitness`. Метод `prepare_zk_inputs()` готовит входные данные для гостя: `(root, leaf, siblings[], path_bits[])`, что соответствует statement «мой `PK` находится в твоём дереве контактов».

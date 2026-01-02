@@ -8,12 +8,14 @@ use crate::identity::types::{DeviceId, RootKey};
 
 type HkdfHmac = Hmac<Sha256>;
 
-const LABEL_USER: &[u8] = b"zk-gatekeeper-user";
-const LABEL_STORAGE: &[u8] = b"zk-gatekeeper-storage";
+const LABEL_USER: &[u8] = b"zk-gatekeeper-hkdf";
+const LABEL_STORAGE: &[u8] = b"zk-gatekeeper-hkdf";
+const CONTEXT_USER: &[u8] = b"user-key-v1";
+const CONTEXT_STORAGE: &[u8] = b"storage-key-v1";
 
 pub fn derive_user_key(root: &RootKey, device: &DeviceId) -> Result<[u8; 32], IdentityError> {
     let mut key = [0u8; 32];
-    derive_labeled_material(root, device, LABEL_USER, &mut key)?;
+    derive_labeled_material(root, device, LABEL_USER, CONTEXT_USER, &mut key)?;
     Ok(key)
 }
 
@@ -22,7 +24,7 @@ pub fn derive_storage_keys(
     device: &DeviceId,
 ) -> Result<([u8; 32], [u8; 32]), IdentityError> {
     let mut material = [0u8; 64];
-    derive_labeled_material(root, device, LABEL_STORAGE, &mut material)?;
+    derive_labeled_material(root, device, LABEL_STORAGE, CONTEXT_STORAGE, &mut material)?;
 
     let mut enc = [0u8; 32];
     let mut mac = [0u8; 32];
@@ -36,6 +38,7 @@ fn derive_labeled_material(
     root: &RootKey,
     device: &DeviceId,
     label: &[u8],
+    context: &[u8],
     out: &mut [u8],
 ) -> Result<(), IdentityError> {
     let mut prk = hkdf_extract(root, device)?;
@@ -51,6 +54,7 @@ fn derive_labeled_material(
         }
 
         expand.update(label);
+        expand.update(context);
         expand.update(&device.0);
         expand.update(&[counter]);
 

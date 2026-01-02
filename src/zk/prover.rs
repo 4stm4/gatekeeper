@@ -56,7 +56,7 @@ impl ZkProver for DeterministicSchnorrProver {
         let mut challenge_scalar =
             transcript_challenge_scalar(self.domain, challenge, &public_bytes, &commitment_bytes);
 
-        let mut response = nonce_scalar + challenge_scalar * secret_scalar;
+        let mut response = Scalar::mul_add(challenge_scalar, secret_scalar, nonce_scalar);
         let proof = ZkProof::new(commitment_bytes, response.to_bytes());
 
         secret_scalar.zeroize();
