@@ -4,13 +4,15 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
 ## Feature flags и контроль зависимостей
 
-- По умолчанию включены флаги `flash-storage`, `secure-storage`, `storage-gate`, `contacts`, `handshake`. Их можно отключить через `--no-default-features` и включать выборочно:  
+- По умолчанию включены флаги `flash-storage`, `secure-storage`, `storage-gate`, `contacts`, `handshake`, `network`. Их можно отключить через `--no-default-features` и включать выборочно:  
   - `flash-storage` — базовый драйвер Flash + `identity::persist`.  
   - `secure-storage` — WAL/SQLCipher‑подобное хранилище.  
   - `storage-gate` — Blob Access Gate.  
   - `contacts` — Merkle дерево контактов.  
   - `handshake` — Noise IK + Double Ratchet (подтягивает опциональный `x25519-dalek`).  
+  - `network` — smoltcp-транспорт (Loopback + UDP/TCP и вспомогательные абстракции).  
 - Все остальные зависимости (`curve25519-dalek`, `sha2`, `hmac`) остаются в ядре, но `curve25519-dalek` собирается с `precomputed_tables`, что уменьшает количество повторных умножений и ускоряет prove()/verify без роста RAM.
+- Для демонстрационных RTIC/Embassy задач предусмотрены опциональные флаги `rtic-demo` и `embassy-demo`, которые добавляют соответствующие зависимости только для примеров.
 
 ## Модель личности
 
@@ -31,6 +33,18 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - Seed-фраза формируется из 34 слов словаря Gatekeeper (`gate000`…`gate255`). Первые 32 слова кодируют `root_key`, последние 2 — checksum SHA-256.
 - `SeedPhrase::from_root`/`::words` создают мнемонику при «цифровом рождении», `SeedPhrase::from_slice`/`recover_root` — гарантируют детерминированное восстановление и проверку корректности.
 - `init_identity_with_seed` возвращает пару `(IdentityState, SeedPhrase)`, а `recover_identity_from_seed` создаёт состояние для любого `device_id` без обращения к энтропии.
+
+## HAL-уровень и мульти-чип
+
+- `platform::hal` задаёт единый контракт `Hal` + `MonotonicTimer`: любой чип обязан предоставить источник энтропии, монотонный таймер и сетевой стек. Это позволяет переносить Identity Manager на STM32, nRF и др. без переписывания верхнего уровня.
+- `platform::hal::Rp2040Hal` связывает `Rp2040Entropy`, `Rp2040Timer` и любой `NetworkStack`. Для STM32 и nRF доступны обёртки `platform::stm32::Stm32Hal` и `platform::nrf::NrfHal`, куда можно передавать реальные драйверы (HAL из экосистемы `stm32-rs`, `nrf-hal` и т. д.).
+- `Rp2040Timer` теперь публичный и реализует `MonotonicTimer`, поэтому ZK/handshake подсистемы используют единый источник времени, а RTIC/Embassy задачи могут читать таймстемпы/делеи через HAL.
+
+## Сетевой транспорт (UDP/TCP)
+
+- `platform::network` экспортирует `NetworkStack` с операциями `send_udp/recv_udp/connect_tcp` и базовую реализацию `SmoltcpNetwork` (Loopback + TCP/UDP сокеты). Конфигурация задаётся через `NetworkConfig` (MAC, IP, размер буферов).
+- Для устройств без сети существует `NetworkStack`-заглушка `NullNetwork`, но при включённом флаге `network` можно переключиться на smoltcp (или собственный драйвер) одним вызовом `Hal::with_network`.
+- Сетевой слой выдаёт `IdentityError::NetworkUnavailable`/`NetworkStackError` при любых проблемах, поэтому вызовы `seal_identity()` и обмена сообщениями могут одинаково реагировать на сбои транспорта.
 
 ## Энтропия и стойкость
 
@@ -191,6 +205,8 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
 - `cargo run --example identity_roundtrip` — генерация личности, получение идентификатора и формирование proof.
 - `cargo run --example zk_roundtrip` — полный цикл prover ↔ verifier с учётом регистрации challenge.
+- `cargo run --example rtic_tasks --features rtic-demo --target thumbv6m-none-eabi` — минимальное RTIC-приложение с параллельными задачами, таймером и UDP-логированием.
+- `cargo run --example embassy_async --features embassy-demo` — host-совместимая Embassy-петля, которая параллельно отправляет UDP-пакеты и показывает подход к обработке асинхронных событий.
 
 ## no_std-аудит и сборка
 

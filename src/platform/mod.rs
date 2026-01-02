@@ -1,4 +1,8 @@
 pub mod device;
+pub mod hal;
+pub mod network;
+pub mod nrf;
 pub mod rom;
 pub mod rp2040;
 pub mod secure_boot;
+pub mod stm32;

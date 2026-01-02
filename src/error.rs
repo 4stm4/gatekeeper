@@ -28,6 +28,8 @@ pub enum IdentityError {
     ContactNotFound,
     ContactAlreadyExists,
     SecureBootFailure,
+    NetworkUnavailable,
+    NetworkStackError,
     /// Инициализация криптографического примитива завершилась ошибкой.
     #[error("cryptographic backend init failed")]
     CryptoBackend {
