@@ -34,12 +34,30 @@ fn generate_flash_layout() -> Result<(), Box<dyn Error>> {
         .into());
     }
 
+    if bootloader % FLASH_SECTOR_SIZE != 0 {
+        return Err("bootloader reservation must align to flash sector size".into());
+    }
+
+    let fs_offset = bootloader;
+    let fs_len = storage_offset
+        .checked_sub(fs_offset)
+        .ok_or("LittleFS region overlaps sealed storage")?;
+    if fs_len < FLASH_SECTOR_SIZE {
+        return Err("LittleFS region must span at least one sector".into());
+    }
+    if fs_len % FLASH_SECTOR_SIZE != 0 {
+        return Err("LittleFS region must be sector aligned".into());
+    }
+    let fs_blocks = fs_len / FLASH_SECTOR_SIZE;
+
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     let layout_path = out_dir.join("flash_layout.rs");
     let contents = format!(
         "pub const FLASH_STORAGE_SECTORS_CFG: usize = {storage_sectors};\n\
          pub const FLASH_STORAGE_OFFSET_CFG: usize = {storage_offset};\n\
-         pub const BOOTLOADER_RESERVE_CFG: usize = {bootloader};\n"
+         pub const BOOTLOADER_RESERVE_CFG: usize = {bootloader};\n\
+         pub const FLASH_FS_OFFSET_CFG: usize = {fs_offset};\n\
+         pub const FLASH_FS_BLOCKS_CFG: usize = {fs_blocks};\n"
     );
     fs::write(layout_path, contents)?;
     Ok(())

@@ -12,6 +12,7 @@ x25519-dalek = { version = "2", default-features = false, features = ["static_se
 log = { version = "0.4", default-features = false }
 thiserror = { version = "1.0", default-features = false }
 subtle = { version = "2.5", default-features = false }
+littlefs2 = { version = "0.6.1", default-features = false, features = ["alloc", "log-none"], optional = true }
 
 # для RP2040 (позже подключается)
 # rp2040-hal = "0.10"
@@ -24,11 +25,19 @@ default = [
     "secure-storage",
     "storage-gate",
 ]
-flash-storage = []
+flash-storage = ["dep:littlefs2"]
 contacts = []
 handshake = ["dep:x25519-dalek"]
 secure-storage = []
 storage-gate = []
+
+[dev-dependencies]
+criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }
+stacker = "0.1.22"
+
+[[bench]]
+name = "stack_profile"
+harness = false
 
 [profile.release]
 opt-level = "z"

@@ -131,11 +131,31 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
 ### Wear leveling и ресурс Flash
 
-- Драйвер `storage::flash` использует littlefs-подобный журнал: четыре сектора (по 4 KiB каждый) образуют кольцо слотов. Каждый `seal()` пишет в следующий слот и стирает только его, что даёт равномерный износ и выдерживает ≈100 000 циклов стереть/запись на сектор (≈400 000 циклов на всю область хранения).
-- Слотность фиксируется константой `STORAGE_SLOT_COUNT = 4`, но может быть увеличена при необходимости — алгоритм переиспользует слоты по принципу LRU (по счётчику `counter`).
-- Хранение совместимо с LittleFS: слоты можно просканировать и из host-приложений, а самый новый выбирается по счётчику. При повреждении последнего слота загрузка откатывается на предыдущий валидный.
-- Build-script умеет подстраивать разметку через переменные окружения: `ZK_BOOTLOADER_BYTES` (по умолчанию 0x1000) резервирует начало Flash под бутлоадер, `ZK_STORAGE_SECTORS` задаёт количество wear-leveling слотов. При конфликте скрипт прервёт сборку.
-- В README задокументировано ограничение по ресурсам Flash, и при интеграции рекомендуется вести журнал циклов, если устройство работает в тяжёлых условиях.
+- Драйвер `storage::flash` продолжает использовать кольцо слотов (по 4 KiB) для sealed-состояния. Каждый `seal()` пишет в новый слот и стирает только его, поэтому суммарный износ распределяется равномерно (≈100 000 циклов на сектор → ≈400 000 циклов на четыре слота).
+- Build-script рассчитывает разметку автоматически: `BOOTLOADER_RESERVE_CFG` резервирует начало Flash под бутлоадер, диапазон `[FLASH_FS_OFFSET_CFG, FLASH_STORAGE_OFFSET_CFG)` выделяется под LittleFS, а `FLASH_STORAGE_OFFSET_CFG`..конец Flash остаётся под wear-level слоты `storage::flash`. Параметры можно менять переменными `ZK_BOOTLOADER_BYTES` и `ZK_STORAGE_SECTORS`; ошибки вылетают при пересечении областей или несоответствии выравниванию.
+
+### Раздел LittleFS
+
+- `storage::littlefs` — полноценный драйвер LittleFS поверх ROM API RP2040 (`littlefs2`). Он использует блоки по 4 KiB и кэш 256 байт, поэтому практически не создаёт дополнительных стираний и даёт wear-leveling для произвольных файлов (ratchet-state, WAL, blob'ы и т. д.).
+- Раздел начинается с `FLASH_FS_OFFSET_CFG` (сразу после бутлоадера) и содержит `FLASH_FS_BLOCKS_CFG` блоков по 4 KiB. Пока область не отформатирована, `LittleFs::format()` обязан быть вызван один раз, дальше можно монтировать её из RAM/host.
+- Пример использования:
+  ```rust,no_run
+  use littlefs2::io::Write;
+  use littlefs2::path::Path;
+  use zk_gatekeeper::storage::littlefs::LittleFs;
+
+  let mut fs = LittleFs::new();
+  fs.format().ok(); // только при первом запуске
+  fs.mount(|mounted| {
+      mounted.create_dir_all(Path::from(b"/state"))?;
+      mounted.open_file_with_options_and_then(
+          |opts| opts.create(true).write(true).truncate(true),
+          Path::from(b"/state/ratchet.bin"),
+          |file| file.write(b"ratchet snapshot"),
+      )
+  }).expect("flash I/O failed");
+  ```
+- Host-инструменты могут монтировать тот же раздел (через `probe-rs` или SWD дамп) и читать/писать файлы LittleFS напрямую — формат полностью совместим с `littlefs2`.
 - **ZkProof v1**: `version(1) | payload_len(1=64) | commitment(32) | response(32)` (см. `zk::proof`). Любые расширения требуют увеличения `ZK_PROOF_VERSION`.
 - **Public Key**: 32 байта, сжатая точка Ed25519 (`UserPublicKey`). Выдаётся через `IdentityState::public_key()` и используется в verifier/gate.
 - API entrypoints: `identity::{init, seed, link, persist}` (включая `unseal_identity_guarded`), `zk::{prover, verifier}`, `handshake::{initiator_start, responder_accept, ratchet}`, `contacts::ContactTree`, `storage::{flash, secure, gate}`, а также `platform::{rp2040, device, secure_boot}`.
@@ -170,3 +190,9 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
 - Проект `#![no_std]`; зависимости подключены без `std`. Проверяйте `cargo check --no-default-features --target thumbv6m-none-eabi`.
 - Размер и зависимост и: `cargo build --release --target thumbv6m-none-eabi` + `cargo size --target thumbv6m-none-eabi --lib`; `cargo tree --edges no-dev`. Те же команды автоматически выполняются в CI (`.github/workflows/size.yml`) — push/PR падает, если `cargo size` не проходит.
+
+## Профилирование стека
+
+- **Статический проход:** `rustup component add llvm-tools-preview` один раз, далее `RUSTFLAGS="-Z emit-stack-sizes" cargo +nightly build --release --target thumbv6m-none-eabi`. Полученные `.stack_sizes` читаются через `llvm-readobj --stack-sizes target/thumbv6m-none-eabi/release/libzk_gatekeeper.a | sort -k4 -nr | head`, что мгновенно показывает пиковые затраты стека на каждую функцию.
+- **Runtime на железе:** `probe-run --chip RP2040 --stack 0x4000 target/thumbv6m-none-eabi/release/examples/<app>.elf` останавливает выполнение при выходе за лимит и печатает реальное потребление. Это позволяет проверять каждую сборку после линковки.
+- **Host-профилирование:** для нагрузочных сценариев используется `criterion`-бенч (описан в `docs/stack_profiling.md`), который гоняет `init_identity` и `prove()` в цикле и логирует `stacker::remaining_stack()` — так можно подбирать безопасный `probe-run --stack` порог ещё до прошивки.
