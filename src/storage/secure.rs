@@ -210,7 +210,9 @@ impl WalTransaction {
     }
 }
 
-fn decode_records(buf: &[u8]) -> Result<(Vec<RatchetStateRow>, Vec<ContactMetadata>), IdentityError> {
+fn decode_records(
+    buf: &[u8],
+) -> Result<(Vec<RatchetStateRow>, Vec<ContactMetadata>), IdentityError> {
     if buf.is_empty() {
         return Err(IdentityError::StorageCorrupted);
     }

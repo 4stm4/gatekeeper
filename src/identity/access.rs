@@ -2,8 +2,8 @@ use core::marker::PhantomData;
 
 use crate::error::IdentityError;
 use crate::identity::types::*;
-use crate::zk::prover::ZkProver;
 use crate::zk::proof::ZkProof;
+use crate::zk::prover::ZkProver;
 
 pub struct ZkSecretRef<'a> {
     pub(crate) secret: &'a UserSecret,

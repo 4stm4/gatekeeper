@@ -72,10 +72,7 @@ impl<'a> BlobIdentityProver<'a, DeterministicSchnorrProver> {
 }
 
 impl<'a, P: ZkProver> BlobIdentityProver<'a, P> {
-    pub fn prove(
-        &self,
-        challenge: &BlobFetchChallenge,
-    ) -> Result<BlobFetchRequest, IdentityError> {
+    pub fn prove(&self, challenge: &BlobFetchChallenge) -> Result<BlobFetchRequest, IdentityError> {
         let challenge_bytes = challenge.encode();
         let proof = self.identity.prove_with(&self.prover, &challenge_bytes)?;
         Ok(BlobFetchRequest::new(proof, challenge))
@@ -91,9 +88,11 @@ impl BlobAccessGate {
     }
 
     pub fn register(&mut self, entry: BlobAccessEntry) {
-        if let Some(existing) = self.entries.iter_mut().find(|e| {
-            e.blob_id == entry.blob_id && e.identity == entry.identity
-        }) {
+        if let Some(existing) = self
+            .entries
+            .iter_mut()
+            .find(|e| e.blob_id == entry.blob_id && e.identity == entry.identity)
+        {
             *existing = entry;
         } else {
             self.entries.push(entry);

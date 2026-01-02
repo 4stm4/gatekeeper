@@ -74,7 +74,10 @@ pub struct PseudoEntropy {
 
 impl PseudoEntropy {
     pub fn new(seed: [u8; 32]) -> Self {
-        Self { state: seed, counter: 0 }
+        Self {
+            state: seed,
+            counter: 0,
+        }
     }
 }
 

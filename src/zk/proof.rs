@@ -25,8 +25,7 @@ impl ZkProof {
         bytes[1] = (ZK_COMMITMENT_LEN + ZK_RESPONSE_LEN) as u8;
         bytes[ZK_PROOF_HEADER_LEN..ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN]
             .copy_from_slice(&commitment);
-        bytes[ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN..]
-            .copy_from_slice(&response);
+        bytes[ZK_PROOF_HEADER_LEN + ZK_COMMITMENT_LEN..].copy_from_slice(&response);
         Self { bytes }
     }
 
@@ -69,12 +68,7 @@ impl ZkProof {
             .unwrap()
     }
 
-    pub fn verify(
-        &self,
-        domain: &[u8],
-        challenge: &[u8],
-        public_key: &[u8; 32],
-    ) -> bool {
+    pub fn verify(&self, domain: &[u8], challenge: &[u8], public_key: &[u8; 32]) -> bool {
         if self.version() != ZK_PROOF_VERSION {
             return false;
         }

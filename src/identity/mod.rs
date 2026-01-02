@@ -1,9 +1,10 @@
-pub mod types;
+pub mod access;
 pub mod entropy;
 pub mod hkdf;
 pub mod init;
-pub mod access;
 pub mod keys;
+pub mod link;
+#[cfg(feature = "flash-storage")]
 pub mod persist;
 pub mod seed;
-pub mod link;
+pub mod types;

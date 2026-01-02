@@ -1,7 +1,7 @@
 use crate::error::IdentityError;
 use crate::identity::types::{IdentityState, RootKey};
-use crate::storage::flash::FlashStorage;
 use crate::platform::secure_boot::FirmwareGuard;
+use crate::storage::flash::FlashStorage;
 
 pub fn seal_identity(storage: &FlashStorage, state: &IdentityState) -> Result<(), IdentityError> {
     storage.seal(state)

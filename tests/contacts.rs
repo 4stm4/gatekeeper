@@ -1,3 +1,5 @@
+#![cfg(feature = "contacts")]
+
 use zk_gatekeeper::contacts::ContactTree;
 use zk_gatekeeper::identity::types::UserPublicKey;
 

@@ -1,5 +1,9 @@
+#![cfg(feature = "storage-gate")]
+
 use zk_gatekeeper::identity::types::{DeviceId, IdentityState, RootKey};
-use zk_gatekeeper::storage::gate::{BLOB_PROOF_DOMAIN, BlobAccessEntry, BlobAccessGate, BlobFetchChallenge, BlobIdentityProver};
+use zk_gatekeeper::storage::gate::{
+    BlobAccessEntry, BlobAccessGate, BlobFetchChallenge, BlobIdentityProver, BLOB_PROOF_DOMAIN,
+};
 
 fn state() -> IdentityState {
     let root = RootKey([7u8; 32]);

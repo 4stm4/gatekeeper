@@ -1,9 +1,7 @@
 use crate::error::IdentityError;
 use crate::identity::access::ZkSecretRef;
 
-use super::proof::{
-    hash_with_length, transcript_challenge_scalar, ZkProof, MAX_CHALLENGE_LEN,
-};
+use super::proof::{hash_with_length, transcript_challenge_scalar, ZkProof, MAX_CHALLENGE_LEN};
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::scalar::Scalar;
@@ -11,11 +9,7 @@ use sha2::{Digest, Sha512};
 use zeroize::Zeroize;
 
 pub trait ZkProver {
-    fn prove(
-        &self,
-        sk: ZkSecretRef<'_>,
-        challenge: &[u8],
-    ) -> Result<ZkProof, IdentityError>;
+    fn prove(&self, sk: ZkSecretRef<'_>, challenge: &[u8]) -> Result<ZkProof, IdentityError>;
 }
 
 pub struct DeterministicSchnorrProver {
@@ -46,11 +40,7 @@ impl Default for DeterministicSchnorrProver {
 }
 
 impl ZkProver for DeterministicSchnorrProver {
-    fn prove(
-        &self,
-        sk: ZkSecretRef<'_>,
-        challenge: &[u8],
-    ) -> Result<ZkProof, IdentityError> {
+    fn prove(&self, sk: ZkSecretRef<'_>, challenge: &[u8]) -> Result<ZkProof, IdentityError> {
         if challenge.is_empty() || challenge.len() > MAX_CHALLENGE_LEN {
             return Err(IdentityError::InvalidChallenge);
         }

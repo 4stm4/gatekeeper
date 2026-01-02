@@ -20,12 +20,7 @@ pub unsafe fn connect_internal_flash() {
     call_void(*b"IF");
 }
 
-pub unsafe fn flash_range_erase(
-    addr: u32,
-    count: usize,
-    block_size: u32,
-    block_cmd: u8,
-) {
+pub unsafe fn flash_range_erase(addr: u32, count: usize, block_size: u32, block_cmd: u8) {
     let func = lookup(*b"RE");
     let erase: extern "C" fn(u32, usize, u32, u8) = mem::transmute(func);
     erase(addr, count, block_size, block_cmd);

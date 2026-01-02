@@ -78,10 +78,7 @@ impl ContactTree {
         }
     }
 
-    pub fn membership_proof(
-        &self,
-        pk: &UserPublicKey,
-    ) -> Result<ContactWitness, IdentityError> {
+    pub fn membership_proof(&self, pk: &UserPublicKey) -> Result<ContactWitness, IdentityError> {
         let leaf = poseidon::hash_leaf(pk.as_bytes());
         let index = self
             .find_leaf(&leaf)

@@ -1,3 +1,6 @@
+#[cfg(feature = "flash-storage")]
 pub mod flash;
-pub mod secure;
+#[cfg(feature = "storage-gate")]
 pub mod gate;
+#[cfg(feature = "secure-storage")]
+pub mod secure;

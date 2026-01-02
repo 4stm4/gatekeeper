@@ -7,9 +7,7 @@ use sha2::Sha256;
 use crate::error::IdentityError;
 use crate::identity::hkdf::derive_storage_keys;
 use crate::identity::keys;
-use crate::identity::types::{
-    DeviceId, IdentityState, RootKey, UserPublicKey, UserSecret,
-};
+use crate::identity::types::{DeviceId, IdentityState, RootKey, UserPublicKey, UserSecret};
 use crate::platform::device::DeviceBindingKey;
 use crate::platform::rom;
 use crate::platform::secure_boot::FirmwareGuard;
@@ -22,7 +20,11 @@ const FLASH_BASE: usize = 0x1000_0000;
 const FLASH_TOTAL_SIZE: usize = 2 * 1024 * 1024;
 const FLASH_SECTOR_SIZE: usize = 4096;
 const FLASH_PAGE_SIZE: usize = 256;
-const FLASH_STORAGE_OFFSET: usize = FLASH_TOTAL_SIZE - FLASH_SECTOR_SIZE;
+const FLASH_STORAGE_SECTORS: usize = 4;
+const FLASH_STORAGE_SIZE: usize = FLASH_STORAGE_SECTORS * FLASH_SECTOR_SIZE;
+const FLASH_STORAGE_OFFSET: usize = FLASH_TOTAL_SIZE - FLASH_STORAGE_SIZE;
+const STORAGE_SLOT_COUNT: usize = FLASH_STORAGE_SECTORS;
+const SLOT_SIZE: usize = FLASH_SECTOR_SIZE;
 const FLASH_ERASE_CMD: u8 = 0x20;
 
 const MAGIC: [u8; 4] = *b"ZKGS";
@@ -42,6 +44,12 @@ struct StoredHeader {
     counter: u32,
 }
 
+struct SlotRecord {
+    header: StoredHeader,
+    header_bytes: [u8; HEADER_SIZE],
+    slot: usize,
+}
+
 impl FlashStorage {
     pub const fn new() -> Self {
         FlashStorage
@@ -57,11 +65,15 @@ impl FlashStorage {
     }
 
     pub fn seal(&self, state: &IdentityState) -> Result<(), IdentityError> {
-        let existing_counter = self.load_header()?.map(|h| h.counter).unwrap_or(0);
+        let latest = self.latest_record()?;
+        let existing_counter = latest.as_ref().map(|r| r.header.counter).unwrap_or(0);
         let counter = existing_counter.wrapping_add(1).max(1);
+        let target_slot = latest
+            .as_ref()
+            .map(|r| (r.slot + 1) % STORAGE_SLOT_COUNT)
+            .unwrap_or(0);
 
-        let (mut enc_key, mut mac_key) =
-            derive_storage_keys(&state.root_key, &state.device_id)?;
+        let (mut enc_key, mut mac_key) = derive_storage_keys(&state.root_key, &state.device_id)?;
         let binding = DeviceBindingKey::new()?;
         binding.mix_into(&mut enc_key, &mut mac_key);
         drop(binding);
@@ -85,10 +97,10 @@ impl FlashStorage {
         let mut page = [0xFFu8; FLASH_PAGE_SIZE];
         page[..RECORD_TOTAL_SIZE].copy_from_slice(&record);
 
-        self.program_sector(&page)?;
+        self.program_slot(target_slot, &page)?;
 
         let mut verify = [0u8; RECORD_TOTAL_SIZE];
-        self.read_flash(0, &mut verify);
+        self.read_slot(target_slot, 0, &mut verify);
         if !Self::timing_safe_eq(&verify, &record) {
             ciphertext.fill(0);
             enc_key.fill(0);
@@ -112,18 +124,16 @@ impl FlashStorage {
     }
 
     pub fn unseal(&self, root_key: &RootKey) -> Result<IdentityState, IdentityError> {
-        let mut header_bytes = [0u8; HEADER_SIZE];
-        self.read_flash(0, &mut header_bytes);
-        if Self::is_erased(&header_bytes) {
-            return Err(IdentityError::StorageNotFound);
-        }
-
-        let header = Self::parse_header(&header_bytes)?;
+        let record = self
+            .latest_record()?
+            .ok_or(IdentityError::StorageNotFound)?;
+        let header = record.header;
+        let mut header_bytes = record.header_bytes;
 
         let mut payload = [0u8; PAYLOAD_SIZE];
-        self.read_flash(HEADER_SIZE, &mut payload);
+        self.read_slot(record.slot, HEADER_SIZE, &mut payload);
         let mut stored_mac = [0u8; MAC_SIZE];
-        self.read_flash(RECORD_DATA_SIZE, &mut stored_mac);
+        self.read_slot(record.slot, RECORD_DATA_SIZE, &mut stored_mac);
 
         let (mut enc_key, mut mac_key) = derive_storage_keys(root_key, &header.device_id)?;
         let binding = DeviceBindingKey::new()?;
@@ -179,13 +189,42 @@ impl FlashStorage {
         })
     }
 
-    fn load_header(&self) -> Result<Option<StoredHeader>, IdentityError> {
-        let mut header_bytes = [0u8; HEADER_SIZE];
-        self.read_flash(0, &mut header_bytes);
-        if Self::is_erased(&header_bytes) {
-            return Ok(None);
+    fn latest_record(&self) -> Result<Option<SlotRecord>, IdentityError> {
+        let mut best: Option<SlotRecord> = None;
+        let mut last_error: Option<IdentityError> = None;
+
+        for slot in 0..STORAGE_SLOT_COUNT {
+            let mut header_bytes = [0u8; HEADER_SIZE];
+            self.read_slot(slot, 0, &mut header_bytes);
+            if Self::is_erased(&header_bytes) {
+                continue;
+            }
+
+            match Self::parse_header(&header_bytes) {
+                Ok(header) => {
+                    let should_replace = best
+                        .as_ref()
+                        .map(|record| header.counter > record.header.counter)
+                        .unwrap_or(true);
+                    if should_replace {
+                        best = Some(SlotRecord {
+                            header,
+                            header_bytes,
+                            slot,
+                        });
+                    }
+                }
+                Err(err) => last_error = Some(err),
+            }
         }
-        Self::parse_header(&header_bytes).map(Some)
+
+        if let Some(record) = best {
+            Ok(Some(record))
+        } else if let Some(err) = last_error {
+            Err(err)
+        } else {
+            Ok(None)
+        }
     }
 
     fn parse_header(bytes: &[u8]) -> Result<StoredHeader, IdentityError> {
@@ -287,30 +326,37 @@ impl FlashStorage {
         diff == 0
     }
 
-    fn read_flash(&self, offset: usize, buf: &mut [u8]) {
-        debug_assert!(offset + buf.len() <= FLASH_SECTOR_SIZE);
-        let addr = FLASH_BASE + FLASH_STORAGE_OFFSET + offset;
+    fn read_slot(&self, slot: usize, offset: usize, buf: &mut [u8]) {
+        debug_assert!(slot < STORAGE_SLOT_COUNT);
+        debug_assert!(offset + buf.len() <= SLOT_SIZE);
+        let addr = FLASH_BASE + Self::slot_offset(slot) + offset;
         unsafe {
             ptr::copy_nonoverlapping(addr as *const u8, buf.as_mut_ptr(), buf.len());
         }
     }
 
-    fn program_sector(&self, page: &[u8; FLASH_PAGE_SIZE]) -> Result<(), IdentityError> {
+    fn program_slot(&self, slot: usize, page: &[u8; FLASH_PAGE_SIZE]) -> Result<(), IdentityError> {
+        debug_assert!(slot < STORAGE_SLOT_COUNT);
+        let offset = Self::slot_offset(slot);
         unsafe {
             rom::connect_internal_flash();
             rom::flash_exit_xip();
             rom::flash_range_erase(
-                FLASH_STORAGE_OFFSET as u32,
+                offset as u32,
                 FLASH_SECTOR_SIZE,
                 FLASH_SECTOR_SIZE as u32,
                 FLASH_ERASE_CMD,
             );
-            rom::flash_range_program(FLASH_STORAGE_OFFSET as u32, page.as_ptr(), FLASH_PAGE_SIZE);
+            rom::flash_range_program(offset as u32, page.as_ptr(), FLASH_PAGE_SIZE);
             rom::flash_flush_cache();
             rom::flash_enter_cmd_xip();
             rom::connect_internal_flash();
             rom::flash_flush_cache();
         }
         Ok(())
+    }
+
+    const fn slot_offset(slot: usize) -> usize {
+        FLASH_STORAGE_OFFSET + slot * SLOT_SIZE
     }
 }

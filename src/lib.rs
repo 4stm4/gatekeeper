@@ -2,10 +2,17 @@
 
 extern crate alloc;
 
-pub mod error;
-pub mod identity;
-pub mod zk;
-pub mod storage;
-pub mod platform;
+#[cfg(feature = "contacts")]
 pub mod contacts;
+pub mod error;
+#[cfg(feature = "handshake")]
 pub mod handshake;
+pub mod identity;
+pub mod platform;
+#[cfg(any(
+    feature = "flash-storage",
+    feature = "secure-storage",
+    feature = "storage-gate"
+))]
+pub mod storage;
+pub mod zk;

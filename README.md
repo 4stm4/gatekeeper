@@ -2,6 +2,16 @@
 
 Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
+## Feature flags и контроль зависимостей
+
+- По умолчанию включены флаги `flash-storage`, `secure-storage`, `storage-gate`, `contacts`, `handshake`. Их можно отключить через `--no-default-features` и включать выборочно:  
+  - `flash-storage` — базовый драйвер Flash + `identity::persist`.  
+  - `secure-storage` — WAL/SQLCipher‑подобное хранилище.  
+  - `storage-gate` — Blob Access Gate.  
+  - `contacts` — Merkle дерево контактов.  
+  - `handshake` — Noise IK + Double Ratchet (подтягивает опциональный `x25519-dalek`).  
+- Все остальные зависимости (`curve25519-dalek`, `sha2`, `hmac`) остаются в ядре, но `curve25519-dalek` собирается с `precomputed_tables`, что уменьшает количество повторных умножений и ускоряет prove()/verify без роста RAM.
+
 ## Модель личности
 
 - **Публичный ключ** вычисляется детерминированно: `PK = sk_user · G`. Ключ не хранится в Flash, но доступен через `IdentityState::public_key()`.
@@ -110,6 +120,13 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 ## Форматы и API
 
 - **Flash-record v1**: `magic(4="ZKGS") | version(1) | reserved(1) | payload_len(2=64) | counter(4) | reserved(4) | device_id(16) | ciphertext(64: sk_user || pk_user) | mac(32)` — сериализация из `storage::flash`. Несоответствия версий/длины → `IdentityError::StorageVersionMismatch/StorageCorrupted`.
+
+### Wear leveling и ресурс Flash
+
+- Драйвер `storage::flash` использует littlefs-подобный журнал: четыре сектора (по 4 KiB каждый) образуют кольцо слотов. Каждый `seal()` пишет в следующий слот и стирает только его, что даёт равномерный износ и выдерживает ≈100 000 циклов стереть/запись на сектор (≈400 000 циклов на всю область хранения).
+- Слотность фиксируется константой `STORAGE_SLOT_COUNT = 4`, но может быть увеличена при необходимости — алгоритм переиспользует слоты по принципу LRU (по счётчику `counter`).
+- Хранение совместимо с LittleFS: слоты можно просканировать и из host-приложений, а самый новый выбирается по счётчику. При повреждении последнего слота загрузка откатывается на предыдущий валидный.
+- В README задокументировано ограничение по ресурсам Flash, и при интеграции рекомендуется вести журнал циклов, если устройство работает в тяжёлых условиях.
 - **ZkProof v1**: `version(1) | payload_len(1=64) | commitment(32) | response(32)` (см. `zk::proof`). Любые расширения требуют увеличения `ZK_PROOF_VERSION`.
 - **Public Key**: 32 байта, сжатая точка Ed25519 (`UserPublicKey`). Выдаётся через `IdentityState::public_key()` и используется в verifier/gate.
 - API entrypoints: `identity::{init, seed, link, persist}` (включая `unseal_identity_guarded`), `zk::{prover, verifier}`, `handshake::{initiator_start, responder_accept, ratchet}`, `contacts::ContactTree`, `storage::{flash, secure, gate}`, а также `platform::{rp2040, device, secure_boot}`.
@@ -142,4 +159,4 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 ## no_std-аудит и сборка
 
 - Проект `#![no_std]`; зависимости подключены без `std`. Проверяйте `cargo check --no-default-features --target thumbv6m-none-eabi`.
-- Размер и зависимост и: `cargo build --release --target thumbv6m-none-eabi` + `cargo size --target thumbv6m-none-eabi`; `cargo tree --edges no-dev`.
+- Размер и зависимост и: `cargo build --release --target thumbv6m-none-eabi` + `cargo size --target thumbv6m-none-eabi --lib`; `cargo tree --edges no-dev`. Те же команды автоматически выполняются в CI (`.github/workflows/size.yml`) — push/PR падает, если `cargo size` не проходит.

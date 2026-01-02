@@ -62,7 +62,10 @@ impl ChallengeTracker {
             self.evict_oldest();
         }
 
-        self.entries.push(ChallengeEntry { digest, timestamp: now });
+        self.entries.push(ChallengeEntry {
+            digest,
+            timestamp: now,
+        });
         Ok(())
     }
 

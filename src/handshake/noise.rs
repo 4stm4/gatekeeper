@@ -102,18 +102,18 @@ pub fn responder_accept<E: EntropySource>(
     }
 
     let ck = derive_initial_ck_responder(incoming, local_static.secret_bytes(), remote_static);
-    verify_mac(&ck, incoming.capabilities.bits().to_le_bytes(), incoming.mac)?;
+    verify_mac(
+        &ck,
+        incoming.capabilities.bits().to_le_bytes(),
+        incoming.mac,
+    )?;
 
     let mut eph_secret = [0u8; 32];
     entropy.fill_bytes(&mut eph_secret)?;
     let eph_public = PublicKey::from(&StaticSecret::from(eph_secret)).to_bytes();
 
-    let shared = finalize_shared_secret_responder(
-        &ck,
-        &eph_secret,
-        incoming.ephemeral,
-        remote_static,
-    );
+    let shared =
+        finalize_shared_secret_responder(&ck, &eph_secret, incoming.ephemeral, remote_static);
     let manager = CapabilityManager::new(capabilities, incoming.capabilities);
     let negotiated = manager.negotiated();
     let mac = handshake_mac(&shared, negotiated.bits().to_le_bytes());

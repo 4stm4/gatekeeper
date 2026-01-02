@@ -24,5 +24,7 @@ fn seed_phrase_roundtrip() {
     let words = seed.words();
     let phrase = SeedPhrase::from_slice(&words).unwrap();
     let recovered = recover_identity_from_seed(&phrase, state.device_id()).unwrap();
-    assert!(recovered.identifier().matches(state.public_key().as_bytes()));
+    assert!(recovered
+        .identifier()
+        .matches(state.public_key().as_bytes()));
 }

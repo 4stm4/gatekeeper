@@ -13,11 +13,7 @@ const ROUND_CONSTANTS: [[u64; WIDTH]; ROUNDS] = [
     [0xc5d1b023286085f0, 0xca417918b8db38ef, 0x8e79dcb0603a180e],
 ];
 
-const MDS: [[u64; WIDTH]; WIDTH] = [
-    [2, 1, 1],
-    [1, 2, 1],
-    [1, 1, 2],
-];
+const MDS: [[u64; WIDTH]; WIDTH] = [[2, 1, 1], [1, 2, 1], [1, 1, 2]];
 
 #[inline(always)]
 fn add_mod(a: u64, b: u64) -> u64 {

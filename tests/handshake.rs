@@ -1,6 +1,11 @@
-use zk_gatekeeper::handshake::{initiator_finish, initiator_start, responder_accept, CapabilityFlags, NoiseStaticKeypair, RatchetState};
-use zk_gatekeeper::identity::entropy::EntropySource;
+#![cfg(feature = "handshake")]
+
 use zk_gatekeeper::error::IdentityError;
+use zk_gatekeeper::handshake::{
+    initiator_finish, initiator_start, responder_accept, CapabilityFlags, NoiseStaticKeypair,
+    RatchetState,
+};
+use zk_gatekeeper::identity::entropy::EntropySource;
 
 struct DummyEntropy;
 impl EntropySource for DummyEntropy {
@@ -18,7 +23,13 @@ fn handshake_roundtrip() {
     let local = NoiseStaticKeypair::new(&mut entropy).unwrap();
     let remote = NoiseStaticKeypair::new(&mut entropy).unwrap();
 
-    let (msg, state) = initiator_start(&local, &remote.public_key(), CapabilityFlags::VOICE, &mut entropy).unwrap();
+    let (msg, state) = initiator_start(
+        &local,
+        &remote.public_key(),
+        CapabilityFlags::VOICE,
+        &mut entropy,
+    )
+    .unwrap();
     let (response, keys_responder) = responder_accept(
         &msg,
         &remote,
@@ -30,7 +41,10 @@ fn handshake_roundtrip() {
     let keys_initiator = initiator_finish(state, &response, &local, &remote.public_key()).unwrap();
 
     assert_eq!(keys_initiator.shared_secret, keys_responder.shared_secret);
-    assert_eq!(keys_initiator.negotiated_capabilities.bits(), CapabilityFlags::VOICE.bits());
+    assert_eq!(
+        keys_initiator.negotiated_capabilities.bits(),
+        CapabilityFlags::VOICE.bits()
+    );
 
     let mut ratchet = RatchetState::new(keys_initiator.shared_secret);
     assert_ne!(ratchet.next_send_key(), [0u8; 32]);

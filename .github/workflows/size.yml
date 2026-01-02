@@ -1,0 +1,24 @@
+name: size
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  cargo-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: Install thumbv6m target
+        run: rustup target add thumbv6m-none-eabi
+      - name: Install cargo-binutils
+        run: cargo install cargo-binutils --version ^0.3 --locked
+      - name: Build release
+        run: cargo build --release --target thumbv6m-none-eabi
+      - name: Report binary size
+        run: cargo size --release --target thumbv6m-none-eabi --lib
