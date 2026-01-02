@@ -5,4 +5,5 @@ pub mod nrf;
 pub mod rom;
 pub mod rp2040;
 pub mod secure_boot;
+pub mod secure_vault;
 pub mod stm32;

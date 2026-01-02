@@ -8,6 +8,7 @@ use littlefs2::io::{Error as FsError, Result as FsResult};
 
 use crate::error::IdentityError;
 use crate::platform::rom;
+use crate::platform::secure_vault::{SecureVault, VaultSlot};
 
 include!(concat!(env!("OUT_DIR"), "/flash_layout.rs"));
 
@@ -48,6 +49,16 @@ impl LittleFs {
     /// Предоставляет мутабельный доступ к драйверу хранения.
     pub fn storage(&mut self) -> &mut FlashStorageDriver {
         &mut self.storage
+    }
+
+    /// Сохраняет master-key файловой системы в защищённом хранилище.
+    pub fn store_master_key(&self, key: &[u8; 32]) -> Result<(), IdentityError> {
+        SecureVault::new().store_application_secret(VaultSlot::LittleFsMasterKey, key)
+    }
+
+    /// Загружает master-key из secure element.
+    pub fn load_master_key(&self) -> Result<[u8; 32], IdentityError> {
+        SecureVault::new().load_application_secret(VaultSlot::LittleFsMasterKey)
     }
 }
 

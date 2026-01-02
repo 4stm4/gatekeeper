@@ -76,6 +76,7 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
 - Состояние во Flash привязано к конкретному RP2040: `storage::flash` смешивает (`DeviceBindingKey::mix_into`) ключи шифрования/MAC с аппаратным `DeviceUid`, извлечённым через ROM (`flash_unique_id`). Даже если атакующий скопирует Flash в другой чип, данные останутся непригодными без UID/PUF исходного устройства.
 - Secure boot проверяется перед `unseal`: `platform::secure_boot::{FirmwareRegion,FirmwareGuard}` вычисляют SHA-256 образа XIP-Flash и возвращают `IdentityError::SecureBootFailure`, если hash не совпадает. Встроенный helper `identity::persist::unseal_identity_guarded` обязует вызывающего предоставить контрольную сумму и тем самым блокирует загрузку личности при подмене прошивки.
+- Секреты (`sk_user`, master-key LittleFS) никогда не лежат в открытом виде в LittleFS/Flash: модуль `platform::secure_vault` пишет их в отдельный сектор, зашифрованный ключом PUF (`DeviceBindingKey`). Дамп Flash или SWD не раскрывает содержимое без доступа к конкретному кристаллу.
 - Угрозы физического доступа документируются явно: этот README фиксирует сценарии (чтение RAM/Flash, перенос образа на другое устройство, подмена прошивки) и ответные меры (zeroization, device binding, secure boot).
 
 ## Эталонная проверка proof

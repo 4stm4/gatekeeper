@@ -26,6 +26,7 @@ use crate::identity::types::{DeviceId, IdentityState, RootKey, UserPublicKey, Us
 use crate::platform::device::DeviceBindingKey;
 use crate::platform::rom;
 use crate::platform::secure_boot::FirmwareGuard;
+use crate::platform::secure_vault::SecureVault;
 include!(concat!(env!("OUT_DIR"), "/flash_layout.rs"));
 
 type HmacSha256 = Hmac<Sha256>;
@@ -47,9 +48,9 @@ const MAGIC: [u8; 4] = *b"ZKGS";
 const FORMAT_VERSION: u8 = 1;
 
 const HEADER_SIZE: usize = 32;
-const SECRET_SIZE: usize = 32;
+const SECRET_TAG_SIZE: usize = 32;
 const PK_SIZE: usize = 32;
-const PAYLOAD_SIZE: usize = SECRET_SIZE + PK_SIZE;
+const PAYLOAD_SIZE: usize = SECRET_TAG_SIZE + PK_SIZE;
 const MAC_SIZE: usize = 32;
 const RECORD_DATA_SIZE: usize = HEADER_SIZE + PAYLOAD_SIZE;
 const RECORD_TOTAL_SIZE: usize = RECORD_DATA_SIZE + MAC_SIZE;
@@ -58,6 +59,7 @@ const RECORD_TOTAL_SIZE: usize = RECORD_DATA_SIZE + MAC_SIZE;
 struct StoredHeader {
     device_id: DeviceId,
     counter: u32,
+    epoch: u32,
 }
 
 struct SlotRecord {
@@ -86,14 +88,16 @@ impl FlashStorage {
     pub fn seal(&self, state: &IdentityState) -> Result<(), IdentityError> {
         let latest = self.latest_record()?;
         let existing_counter = latest.as_ref().map(|r| r.header.counter).unwrap_or(0);
-        let counter = existing_counter.wrapping_add(1).max(1);
+        let existing_epoch = latest.as_ref().map(|r| r.header.epoch).unwrap_or(0);
+        let (epoch, counter) = Self::advance_counter(existing_epoch, existing_counter)?;
         let target_slot = latest
             .as_ref()
             .map(|r| (r.slot + 1) % STORAGE_SLOT_COUNT)
             .unwrap_or(0);
         info!(
-            "Flash seal start: slot={} counter={} device={:x?}",
+            "Flash seal start: slot={} epoch={} counter={} device={:x?}",
             target_slot,
+            epoch,
             counter,
             state.device_id().0
         );
@@ -103,14 +107,19 @@ impl FlashStorage {
         binding.mix_into(&mut enc_key, &mut mac_key);
         drop(binding);
 
+        let vault = SecureVault::new();
+        vault.store_identity_secret(&state.sk_user.0)?;
+        let mut secret_tag = Self::compute_secret_tag(&mac_key, &state.sk_user.0)?;
+
         let mut ciphertext = [0u8; PAYLOAD_SIZE];
-        ciphertext[..SECRET_SIZE].copy_from_slice(&state.sk_user.0);
+        ciphertext[..SECRET_TAG_SIZE].copy_from_slice(&secret_tag);
         let pk_bytes = state.public_key().into_bytes();
-        ciphertext[SECRET_SIZE..PAYLOAD_SIZE].copy_from_slice(&pk_bytes);
+        ciphertext[SECRET_TAG_SIZE..PAYLOAD_SIZE].copy_from_slice(&pk_bytes);
+        secret_tag.zeroize();
         Self::apply_keystream(&enc_key, &state.device_id, counter, &mut ciphertext)?;
 
         let mut header_bytes = [0u8; HEADER_SIZE];
-        Self::write_header(&mut header_bytes, counter, &state.device_id);
+        Self::write_header(&mut header_bytes, epoch, counter, &state.device_id);
 
         let mut record = [0u8; RECORD_TOTAL_SIZE];
         record[..HEADER_SIZE].copy_from_slice(&header_bytes);
@@ -158,8 +167,8 @@ impl FlashStorage {
         let header = record.header;
         let mut header_bytes = record.header_bytes;
         info!(
-            "Flash unseal: slot={} counter={}",
-            record.slot, header.counter
+            "Flash unseal: slot={} epoch={} counter={}",
+            record.slot, header.epoch, header.counter
         );
 
         let mut payload = [0u8; PAYLOAD_SIZE];
@@ -188,10 +197,30 @@ impl FlashStorage {
 
         Self::apply_keystream(&enc_key, &header.device_id, header.counter, &mut payload)?;
 
-        let mut secret_bytes = [0u8; SECRET_SIZE];
-        secret_bytes.copy_from_slice(&payload[..SECRET_SIZE]);
+        let mut secret_tag = [0u8; SECRET_TAG_SIZE];
+        secret_tag.copy_from_slice(&payload[..SECRET_TAG_SIZE]);
         let mut pk_bytes = [0u8; PK_SIZE];
-        pk_bytes.copy_from_slice(&payload[SECRET_SIZE..PAYLOAD_SIZE]);
+        pk_bytes.copy_from_slice(&payload[SECRET_TAG_SIZE..PAYLOAD_SIZE]);
+
+        let vault = SecureVault::new();
+        let mut secret_bytes = vault.load_identity_secret()?;
+
+        let mut derived_tag = Self::compute_secret_tag(&mac_key, &secret_bytes)?;
+        if !Self::timing_safe_eq(&secret_tag, &derived_tag) {
+            enc_key.fill(0);
+            mac_key.fill(0);
+            payload.fill(0);
+            expected_mac.fill(0);
+            stored_mac.fill(0);
+            header_bytes.fill(0);
+            derived_tag.zeroize();
+            secret_tag.zeroize();
+            pk_bytes.fill(0);
+            secret_bytes.fill(0);
+            return Err(IdentityError::StorageCorrupted);
+        }
+        derived_tag.zeroize();
+        secret_tag.zeroize();
 
         let derived_pk = keys::public_key_from_secret(&secret_bytes);
         if derived_pk.ct_eq(&pk_bytes).unwrap_u8() != 1 {
@@ -240,7 +269,11 @@ impl FlashStorage {
                 Ok(header) => {
                     let should_replace = best
                         .as_ref()
-                        .map(|record| header.counter > record.header.counter)
+                        .map(|record| {
+                            header.epoch > record.header.epoch
+                                || (header.epoch == record.header.epoch
+                                    && header.counter > record.header.counter)
+                        })
                         .unwrap_or(true);
                     if should_replace {
                         best = Some(SlotRecord {
@@ -282,22 +315,24 @@ impl FlashStorage {
         }
 
         let counter = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        let epoch = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
         let mut device = [0u8; 16];
         device.copy_from_slice(&bytes[16..32]);
 
         Ok(StoredHeader {
             counter,
+            epoch,
             device_id: DeviceId(device),
         })
     }
 
-    fn write_header(buf: &mut [u8; HEADER_SIZE], counter: u32, device: &DeviceId) {
+    fn write_header(buf: &mut [u8; HEADER_SIZE], epoch: u32, counter: u32, device: &DeviceId) {
         buf[..4].copy_from_slice(&MAGIC);
         buf[4] = FORMAT_VERSION;
         buf[5] = 0;
         buf[6..8].copy_from_slice(&(PAYLOAD_SIZE as u16).to_le_bytes());
         buf[8..12].copy_from_slice(&counter.to_le_bytes());
-        buf[12..16].copy_from_slice(&0u32.to_le_bytes());
+        buf[12..16].copy_from_slice(&epoch.to_le_bytes());
         buf[16..32].copy_from_slice(&device.0);
     }
 
@@ -347,6 +382,19 @@ impl FlashStorage {
         Ok(out)
     }
 
+    fn compute_secret_tag(
+        mac_key: &[u8; 32],
+        secret: &[u8; 32],
+    ) -> Result<[u8; 32], IdentityError> {
+        let mut mac = HmacSha256::new_from_slice(mac_key)?;
+        mac.update(b"zk-gatekeeper-secret-tag");
+        mac.update(secret);
+        let digest = mac.finalize().into_bytes();
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        Ok(out)
+    }
+
     fn is_erased(buf: &[u8]) -> bool {
         buf.iter().all(|b| *b == 0xFF)
     }
@@ -361,6 +409,19 @@ impl FlashStorage {
             diff |= x ^ y;
         }
         diff == 0
+    }
+
+    fn advance_counter(epoch: u32, counter: u32) -> Result<(u32, u32), IdentityError> {
+        if counter == u32::MAX {
+            let next_epoch = epoch
+                .checked_add(1)
+                .ok_or(IdentityError::StorageCorrupted)?;
+            Ok((next_epoch, 1))
+        } else {
+            let next = counter + 1;
+            let counter = if next == 0 { 1 } else { next };
+            Ok((epoch, counter))
+        }
     }
 
     fn read_slot(&self, slot: usize, offset: usize, buf: &mut [u8]) {

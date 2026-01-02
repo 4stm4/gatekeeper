@@ -70,6 +70,23 @@ impl Rp2040Entropy {
         Err(IdentityError::EntropyUnavailable)
     }
 
+    fn validate_noise() -> Result<(), IdentityError> {
+        let mut last = rosc_bit();
+        let mut transitions = 0u32;
+        for _ in 0..128 {
+            let bit = rosc_bit();
+            if bit != last {
+                transitions += 1;
+            }
+            last = bit;
+        }
+        if transitions < 4 {
+            Err(IdentityError::EntropyUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+
     fn mix_round(&mut self, round: usize, state: u32) -> Result<u32, IdentityError> {
         Self::ensure_rosc_ready()?;
 
@@ -121,6 +138,7 @@ impl EntropySource for Rp2040Entropy {
 
         Self::ensure_rosc_ready()?;
         Self::ensure_timer_running()?;
+        Self::validate_noise()?;
 
         for byte in out.iter_mut() {
             *byte = self.collect_byte()?;

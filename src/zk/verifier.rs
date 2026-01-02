@@ -15,6 +15,7 @@
 //! let id = state.identifier();
 //! verifier.verify(&id, &pk, challenge, 2, &proof).unwrap();
 //! ```
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use sha2::{Digest, Sha256};
 
@@ -55,14 +56,14 @@ struct ChallengeEntry {
 /// Регистрирует и инвалидирует challenge для защиты от replay.
 pub struct ChallengeTracker {
     config: ChallengeTrackerConfig,
-    entries: Vec<ChallengeEntry>,
+    entries: VecDeque<ChallengeEntry>,
 }
 
 impl ChallengeTracker {
     /// Создаёт новый трекер.
     pub fn new(config: ChallengeTrackerConfig) -> Self {
         Self {
-            entries: Vec::with_capacity(config.capacity.max(1)),
+            entries: VecDeque::with_capacity(config.capacity.max(1)),
             config,
         }
     }
@@ -84,7 +85,7 @@ impl ChallengeTracker {
             self.evict_oldest();
         }
 
-        self.entries.push(ChallengeEntry {
+        self.entries.push_back(ChallengeEntry {
             digest,
             timestamp: now,
         });
@@ -97,7 +98,7 @@ impl ChallengeTracker {
         self.purge(now);
         let digest = digest_challenge(challenge);
         if let Some(idx) = self.find_index(&digest) {
-            self.entries.swap_remove(idx);
+            self.entries.remove(idx);
             Ok(())
         } else {
             Err(IdentityError::ChallengeNotRegistered)
@@ -128,18 +129,9 @@ impl ChallengeTracker {
     }
 
     fn evict_oldest(&mut self) {
-        if self.entries.is_empty() {
-            return;
+        if let Some(entry) = self.entries.pop_front() {
+            log::debug!("ChallengeTracker evicted digest={:x?}", entry.digest);
         }
-        let mut oldest_idx = 0usize;
-        let mut oldest_ts = self.entries[0].timestamp;
-        for (idx, entry) in self.entries.iter().enumerate().skip(1) {
-            if entry.timestamp < oldest_ts {
-                oldest_idx = idx;
-                oldest_ts = entry.timestamp;
-            }
-        }
-        self.entries.swap_remove(oldest_idx);
     }
 }
 

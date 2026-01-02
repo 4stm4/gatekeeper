@@ -18,8 +18,12 @@ fn main() {
 fn generate_flash_layout() -> Result<(), Box<dyn Error>> {
     let bootloader = parse_env("ZK_BOOTLOADER_BYTES")?.unwrap_or(0x1000);
     let storage_sectors = parse_env("ZK_STORAGE_SECTORS")?.unwrap_or(4);
+    let vault_sectors = parse_env("ZK_SECURE_VAULT_SECTORS")?.unwrap_or(2);
     if storage_sectors == 0 {
         return Err("ZK_STORAGE_SECTORS must be > 0".into());
+    }
+    if vault_sectors == 0 {
+        return Err("ZK_SECURE_VAULT_SECTORS must be > 0".into());
     }
 
     let storage_size = storage_sectors * FLASH_SECTOR_SIZE;
@@ -38,10 +42,23 @@ fn generate_flash_layout() -> Result<(), Box<dyn Error>> {
         return Err("bootloader reservation must align to flash sector size".into());
     }
 
+    let vault_size = vault_sectors * FLASH_SECTOR_SIZE;
+    if vault_size >= storage_offset {
+        return Err("secure vault region overlaps sealed storage".into());
+    }
+
+    let vault_offset = storage_offset
+        .checked_sub(vault_size)
+        .ok_or("secure vault exceeds available flash")?;
+
+    if vault_offset <= bootloader {
+        return Err("secure vault overlaps bootloader region".into());
+    }
+
     let fs_offset = bootloader;
-    let fs_len = storage_offset
+    let fs_len = vault_offset
         .checked_sub(fs_offset)
-        .ok_or("LittleFS region overlaps sealed storage")?;
+        .ok_or("LittleFS region overlaps secure vault")?;
     if fs_len < FLASH_SECTOR_SIZE {
         return Err("LittleFS region must span at least one sector".into());
     }
@@ -57,7 +74,9 @@ fn generate_flash_layout() -> Result<(), Box<dyn Error>> {
          pub const FLASH_STORAGE_OFFSET_CFG: usize = {storage_offset};\n\
          pub const BOOTLOADER_RESERVE_CFG: usize = {bootloader};\n\
          pub const FLASH_FS_OFFSET_CFG: usize = {fs_offset};\n\
-         pub const FLASH_FS_BLOCKS_CFG: usize = {fs_blocks};\n"
+         pub const FLASH_FS_BLOCKS_CFG: usize = {fs_blocks};\n\
+         pub const FLASH_SECURE_VAULT_OFFSET_CFG: usize = {vault_offset};\n\
+         pub const FLASH_SECURE_VAULT_SECTORS_CFG: usize = {vault_sectors};\n"
     );
     fs::write(layout_path, contents)?;
     Ok(())
