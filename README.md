@@ -24,12 +24,14 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 ## Энтропия и стойкость
 
 - Источник энтропии `platform::rp2040::Rp2040Entropy` собирает шум сразу из нескольких аппаратных доменов: джиттер ROSC (`ROSC_RANDOMBIT`), дрожание таймера (`timer_raw`) и шум чтения SRAM. Каждый байт строится итеративным смешиванием (XOR/вращения) нескольких выборок, а при недоступности ROSC/таймера возвращается `IdentityError::EntropyUnavailable`.
+- Для тестирования и failover добавлены `identity::entropy::{MockEntropy, PseudoEntropy, FallbackEntropy}`: `MockEntropy` детерминированно воспроизводит буфер и может эмулировать полный отказ источника, `PseudoEntropy` — лёгкий потоковый ГПСЧ на SHA-256 (без heap), а `FallbackEntropy` автоматически переключается на него при `EntropyUnavailable`. Это покрывается `tests/entropy.rs`.
 - В prove/verify используется синхронная детерминированная схема Schnorr: nonce = H("nonce" || domain || challenge || sk), поэтому RNG не нужен, а повторный challenge даёт тот же proof (контролирует verifier). Все временные скаляры и буферы очищаются `zeroize` (см. `identity::keys`, `zk::prover`, `zk::proof`, `storage::flash`), что исключает утечки через RAM.
 - Код избегает ветвлений по секретным данным: все проверки `if` завязаны только на публичные условия (challenge длина, доступность ROSC, проверка MAC).
 
 ## Защита от повторов (replay)
 
-- **Verifier** обязан генерировать уникальные challenge и регистрировать их перед отправкой (`zk::verifier::ChallengeTracker::register`). После получения proof challenge должен быть потреблён (`Verifier::verify` вызывает `consume`), что блокирует его повторное использование.
+- **Verifier** обязан генерировать уникальные challenge и регистрировать их перед отправкой (`zk::verifier::ChallengeTracker::register(challenge, now_ticks)`), указывая текущий монотонный таймер. После получения proof challenge должен быть потреблён через `Verifier::verify(..., now_ticks, proof)`, что блокирует его повторное использование.
+- `ChallengeTrackerConfig { capacity, ttl_ticks }` задаёт лимит хранилища и TTL. Старые challenge автоматически вычищаются по TTL, а при переполнении применяется LRU-эвикция, поэтому host может безопасно выставлять большое время жизни и динамически управлять объёмом памяти без пересборок.
 - **Prover** никогда не кэширует доказательства и не отвечает на пустые либо слишком длинные challenge (см. `DeterministicSchnorrProver::prove` и проверки в `ZkProof::verify`). Повторный challenge детерминированно даёт тот же proof, поэтому именно verifier несёт ответственность за одноразовость значений.
 - Если challenge не был зарегистрирован или уже использован, `ChallengeTracker` вернёт `IdentityError::ChallengeNotRegistered` / `ReplayDetected`, и proof отвергнется до криптографической проверки.
 
@@ -38,6 +40,12 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - Все временные скаляры в криптографических операциях обнуляются через `zeroize` перед выходом (`identity::keys`, `zk::prover`, `zk::proof`).
 - В `storage::flash::seal` и `unseal` после каждого шага очищаются временные буферы (ciphertext, ключи, MAC, читаемые заголовки). Это гарантирует, что в RAM не останется корневых ключей после завершения операций.
 - Новые API не возвращают ссылки на `sk_user`, а `IdentityState::prove_with` лишь на время жизни вызова создаёт `ZkSecretRef`. Это исключает зависание секретов в структурах верхнего уровня.
+
+## Физические атаки и secure boot
+
+- Состояние во Flash привязано к конкретному RP2040: `storage::flash` смешивает (`DeviceBindingKey::mix_into`) ключи шифрования/MAC с аппаратным `DeviceUid`, извлечённым через ROM (`flash_unique_id`). Даже если атакующий скопирует Flash в другой чип, данные останутся непригодными без UID/PUF исходного устройства.
+- Secure boot проверяется перед `unseal`: `platform::secure_boot::{FirmwareRegion,FirmwareGuard}` вычисляют SHA-256 образа XIP-Flash и возвращают `IdentityError::SecureBootFailure`, если hash не совпадает. Встроенный helper `identity::persist::unseal_identity_guarded` обязует вызывающего предоставить контрольную сумму и тем самым блокирует загрузку личности при подмене прошивки.
+- Угрозы физического доступа документируются явно: этот README фиксирует сценарии (чтение RAM/Flash, перенос образа на другое устройство, подмена прошивки) и ответные меры (zeroization, device binding, secure boot).
 
 ## Эталонная проверка proof
 
@@ -59,11 +67,11 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 ### Эталонный verifier и host-суместимость
 
 - Минимальный стек проверки находится в `zk::verifier`:  
-  1. `Verifier::new(domain)` фиксирует контекст.  
-  2. `verifier.tracker_mut().register(challenge)` — одноразовость challenge.  
-  3. Получив `(proof, PK, IdentityIdentifier)`, вызывайте `verifier.verify(...)`:  
+  1. `Verifier::new(domain, ChallengeTrackerConfig::new(capacity, ttl_ticks))` фиксирует домен и параметры трекера.  
+  2. `verifier.tracker_mut().register(challenge, now_ticks)` — учёт одноразовых challenge и TTL.  
+  3. Получив `(proof, PK, IdentityIdentifier)`, вызывайте `verifier.verify(..., now_ticks, proof)`:  
      - Проверяется `IdentityIdentifier::matches(PK)`.  
-     - Challenge помечается использованным; повтор вернёт `ReplayDetected`.  
+     - Challenge помечается использованным (LRU/TTL обрабатываются автоматически); повтор вернёт `ReplayDetected`.  
      - `ZkProof::verify` проверит уравнение Schnorr и версию proof.
 - Этот код не зависит от RP2040 и может компилироваться в любых host-программах (см. `tests/zk.rs`).
 
@@ -104,7 +112,7 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - **Flash-record v1**: `magic(4="ZKGS") | version(1) | reserved(1) | payload_len(2=64) | counter(4) | reserved(4) | device_id(16) | ciphertext(64: sk_user || pk_user) | mac(32)` — сериализация из `storage::flash`. Несоответствия версий/длины → `IdentityError::StorageVersionMismatch/StorageCorrupted`.
 - **ZkProof v1**: `version(1) | payload_len(1=64) | commitment(32) | response(32)` (см. `zk::proof`). Любые расширения требуют увеличения `ZK_PROOF_VERSION`.
 - **Public Key**: 32 байта, сжатая точка Ed25519 (`UserPublicKey`). Выдаётся через `IdentityState::public_key()` и используется в verifier/gate.
-- API entrypoints: `identity::{init, seed, link, persist}`, `zk::{prover, verifier}`, `handshake::{initiator_start, responder_accept, ratchet}`, `contacts::ContactTree`, `storage::{flash, secure, gate}`.
+- API entrypoints: `identity::{init, seed, link, persist}` (включая `unseal_identity_guarded`), `zk::{prover, verifier}`, `handshake::{initiator_start, responder_accept, ratchet}`, `contacts::ContactTree`, `storage::{flash, secure, gate}`, а также `platform::{rp2040, device, secure_boot}`.
 
 ## Тесты
 
@@ -116,6 +124,7 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - `tests/contacts.rs` – Merkle дерево + членство.
 - `tests/storage_gate.rs` – blob gate.
 - `tests/handshake.rs` – Noise handshake и Ratchet.
+- `tests/entropy.rs` – mock-источник и fallback на псевдо-энтропию.
 
 ### Интеграционные сценарии
 

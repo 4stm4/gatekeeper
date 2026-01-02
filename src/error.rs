@@ -1,6 +1,6 @@
 use core::fmt;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum IdentityError {
     EntropyUnavailable,
     DerivationFailed,
@@ -21,6 +21,7 @@ pub enum IdentityError {
     ContactListFull,
     ContactNotFound,
     ContactAlreadyExists,
+    SecureBootFailure,
 }
 
 impl fmt::Display for IdentityError {
