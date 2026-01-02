@@ -18,6 +18,9 @@ pub enum IdentityError {
     InvalidPublicKey,
     VerificationFailed,
     InvalidSeed,
+    ContactListFull,
+    ContactNotFound,
+    ContactAlreadyExists,
 }
 
 impl fmt::Display for IdentityError {

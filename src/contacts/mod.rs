@@ -1,0 +1,173 @@
+use alloc::vec::{self, Vec};
+
+use crate::error::IdentityError;
+use crate::identity::types::UserPublicKey;
+
+mod poseidon;
+
+pub const CONTACT_TREE_DEPTH: usize = 8;
+pub const MAX_CONTACTS: usize = 1 << CONTACT_TREE_DEPTH;
+const EMPTY_LEAF: [u8; 32] = [0u8; 32];
+
+#[derive(Clone)]
+pub struct ContactTree {
+    leaves: Vec<[u8; 32]>,
+    occupied: Vec<bool>,
+    root: [u8; 32],
+}
+
+pub struct ContactWitness {
+    pub leaf: [u8; 32],
+    pub siblings: Vec<[u8; 32]>,
+    pub path: Vec<bool>,
+    pub root: [u8; 32],
+}
+
+pub struct ZkMembershipInputs {
+    pub root: [u8; 32],
+    pub leaf: [u8; 32],
+    pub siblings: Vec<[u8; 32]>,
+    pub path_bits: Vec<bool>,
+}
+
+impl ContactTree {
+    pub fn new() -> Self {
+        let leaves = vec![EMPTY_LEAF; MAX_CONTACTS];
+        let occupied = vec![false; MAX_CONTACTS];
+        let mut tree = Self {
+            leaves,
+            occupied,
+            root: EMPTY_LEAF,
+        };
+        tree.root = tree.compute_root();
+        tree
+    }
+
+    pub fn root(&self) -> [u8; 32] {
+        self.root
+    }
+
+    pub fn contact_set_root(&self) -> [u8; 32] {
+        self.root()
+    }
+
+    pub fn add_contact(&mut self, pk: &UserPublicKey) -> Result<(), IdentityError> {
+        let leaf = poseidon::hash_leaf(pk.as_bytes());
+        if self.find_leaf(&leaf).is_some() {
+            return Err(IdentityError::ContactAlreadyExists);
+        }
+        if let Some(idx) = self.free_slot() {
+            self.leaves[idx] = leaf;
+            self.occupied[idx] = true;
+            self.root = self.compute_root();
+            Ok(())
+        } else {
+            Err(IdentityError::ContactListFull)
+        }
+    }
+
+    pub fn remove_contact(&mut self, pk: &UserPublicKey) -> Result<(), IdentityError> {
+        let leaf = poseidon::hash_leaf(pk.as_bytes());
+        if let Some(idx) = self.find_leaf(&leaf) {
+            self.leaves[idx] = EMPTY_LEAF;
+            self.occupied[idx] = false;
+            self.root = self.compute_root();
+            Ok(())
+        } else {
+            Err(IdentityError::ContactNotFound)
+        }
+    }
+
+    pub fn membership_proof(
+        &self,
+        pk: &UserPublicKey,
+    ) -> Result<ContactWitness, IdentityError> {
+        let leaf = poseidon::hash_leaf(pk.as_bytes());
+        let index = self
+            .find_leaf(&leaf)
+            .ok_or(IdentityError::ContactNotFound)?;
+
+        let (siblings, bits) = self.compute_path(index);
+        Ok(ContactWitness {
+            leaf,
+            siblings,
+            path: bits,
+            root: self.root,
+        })
+    }
+
+    pub fn contains(&self, pk: &UserPublicKey) -> bool {
+        let leaf = poseidon::hash_leaf(pk.as_bytes());
+        self.find_leaf(&leaf).is_some()
+    }
+
+    fn free_slot(&self) -> Option<usize> {
+        self.occupied.iter().position(|slot| !*slot)
+    }
+
+    fn find_leaf(&self, leaf: &[u8; 32]) -> Option<usize> {
+        self.leaves
+            .iter()
+            .zip(self.occupied.iter())
+            .position(|(candidate, occ)| *occ && candidate == leaf)
+    }
+
+    fn compute_root(&self) -> [u8; 32] {
+        let mut level = self.leaves.clone();
+        let mut width = level.len();
+
+        while width > 1 {
+            let mut next = vec![EMPTY_LEAF; width / 2];
+            for i in 0..(width / 2) {
+                let left = level[2 * i];
+                let right = level[2 * i + 1];
+                next[i] = poseidon::hash_pair(&left, &right);
+            }
+            level = next;
+            width /= 2;
+        }
+
+        level[0]
+    }
+
+    fn compute_path(&self, mut index: usize) -> (Vec<[u8; 32]>, Vec<bool>) {
+        let mut level = self.leaves.clone();
+        let mut siblings = Vec::with_capacity(CONTACT_TREE_DEPTH);
+        let mut bits = Vec::with_capacity(CONTACT_TREE_DEPTH);
+        let mut width = level.len();
+
+        for _ in 0..CONTACT_TREE_DEPTH {
+            let is_right = index % 2 == 1;
+            let sibling_idx = if is_right {
+                index - 1
+            } else {
+                (index + 1).min(width - 1)
+            };
+            siblings.push(level[sibling_idx]);
+            bits.push(is_right);
+
+            let mut next = vec![EMPTY_LEAF; width / 2];
+            for i in 0..(width / 2) {
+                let left = level[2 * i];
+                let right = level[2 * i + 1];
+                next[i] = poseidon::hash_pair(&left, &right);
+            }
+            level = next;
+            width /= 2;
+            index /= 2;
+        }
+
+        (siblings, bits)
+    }
+}
+
+impl ContactWitness {
+    pub fn prepare_zk_inputs(&self) -> ZkMembershipInputs {
+        ZkMembershipInputs {
+            root: self.root,
+            leaf: self.leaf,
+            siblings: self.siblings.clone(),
+            path_bits: self.path.clone(),
+        }
+    }
+}

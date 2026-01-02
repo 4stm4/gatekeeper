@@ -71,3 +71,10 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 
 - В `tests/zk.rs` есть два интеграционных теста: `prover_verifier_roundtrip` (проверяет совместимость формата prover ↔ verifier) и `replay_detected` (убеждается, что повтор proof по тому же challenge даёт ошибку).
 - Для проверки совместимости внешних реализаций используйте `ZK_PROOF_VERSION`, `ZK_PROOF_LEN`, `ZK_COMMITMENT_LEN` и `ZK_RESPONSE_LEN` из `zk::proof`. Любое изменение формата потребует обновления версии и тестов.
+
+## Merkle tree контактов
+
+- Контакты представляются как фиксированное Poseidon-дерево глубины 8 (до 256 контактов). Каждая вершина — Poseidon(`left`,`right`), листья — Poseidon(`PK`,`0`). Пустые листья заполнены нулями, так что `contact_set_root` всегда детерминирован.
+- Структуры `contacts::ContactTree` и `ContactWitness` управляют списком контактов: добавление (`add_contact`), удаление/отзыв (`remove_contact`), пересчёт корня и генерация доказательства членства. Дублирующиеся контакты запрещены, переполнение выдаёт `IdentityError::ContactListFull`.
+- `contact_set_root()` возвращает текущее значение корня, подходящее для публикации. Оно обновляется при каждом изменении набора.
+- Для ZK-проверки членства используйте `ContactTree::membership_proof`, который возвращает `ContactWitness`. Метод `prepare_zk_inputs()` готовит входные данные для гостя: `(root, leaf, siblings[], path_bits[])`, что соответствует statement «мой `PK` находится в твоём дереве контактов».
