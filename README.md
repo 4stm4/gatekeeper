@@ -183,8 +183,14 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 ## Документация и протоколы
 
 - README описывает форматы (flash-record, proof, handshake), API и workflow. Для диаграмм используйте PlantUML (пример путь `docs/diagrams/handshake.puml`, TODO).
-- Для rustdoc доступна встроенная документация с примерами (`cargo doc --no-deps --features "flash-storage contacts handshake secure-storage storage-gate"`). Сгенерированные HTML-файлы лежат в `target/doc/index.html` и могут быть опубликованы на артефакт-сервере/Pages.
+- Для rustdoc доступна встроенная документация с примерами (`cargo doc --no-deps --features "flash-storage contacts handshake secure-storage storage-gate"`). Сгенерированные HTML-файлы лежат в `target/doc/index.html`.
+- Workflow `.github/workflows/docs.yml` автоматически собирает `cargo doc --all-features --no-deps`, упаковывает содержимое `target/doc` и публикует его через GitHub Pages (после включения Pages в настройках репозитория).
 - `src/lib.rs` экспортирует минимальный API, дополнительные заметки предполагается хранить в `docs/`.
+
+## Примеры
+
+- `cargo run --example identity_roundtrip` — генерация личности, получение идентификатора и формирование proof.
+- `cargo run --example zk_roundtrip` — полный цикл prover ↔ verifier с учётом регистрации challenge.
 
 ## no_std-аудит и сборка
 
