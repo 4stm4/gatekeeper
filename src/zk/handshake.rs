@@ -7,8 +7,8 @@ use sha2::Sha256;
 
 use crate::error::IdentityError;
 use crate::handshake::{
-    initiator_finish, initiator_start, responder_accept, CapabilityFlags, HandshakeMessage,
-    HandshakeKeys, InitiatorState, NoiseStaticKeypair, RatchetState,
+    initiator_finish, initiator_start, responder_accept, CapabilityFlags, HandshakeKeys,
+    HandshakeMessage, InitiatorState, NoiseStaticKeypair, RatchetRole, RatchetState,
 };
 use crate::identity::entropy::EntropySource;
 
@@ -35,9 +35,9 @@ pub struct PendingInitiator {
 }
 
 impl SecureChannel {
-    fn from_keys(keys: HandshakeKeys) -> Self {
+    fn from_keys(keys: HandshakeKeys, role: RatchetRole) -> Self {
         Self {
-            ratchet: RatchetState::new(keys.shared_secret),
+            ratchet: RatchetState::new(keys.shared_secret, role),
             send_counter: 0,
             recv_counter: 0,
             capabilities: keys.negotiated_capabilities,
@@ -77,7 +77,7 @@ impl PendingInitiator {
         remote_static: &[u8; 32],
     ) -> Result<SecureChannel, IdentityError> {
         let keys = initiator_finish(self.state, response, local_static, remote_static)?;
-        Ok(SecureChannel::from_keys(keys))
+        Ok(SecureChannel::from_keys(keys, RatchetRole::Initiator))
     }
 }
 
@@ -102,7 +102,7 @@ pub fn accept_responder<E: EntropySource>(
 ) -> Result<(HandshakeMessage, SecureChannel), IdentityError> {
     let (response, keys) =
         responder_accept(incoming, local_static, remote_static, capabilities, entropy)?;
-    Ok((response, SecureChannel::from_keys(keys)))
+    Ok((response, SecureChannel::from_keys(keys, RatchetRole::Responder)))
 }
 
 fn encrypt_message(key: &[u8; 32], counter: u64, plaintext: &[u8]) -> SecureMessage {
@@ -116,10 +116,7 @@ fn encrypt_message(key: &[u8; 32], counter: u64, plaintext: &[u8]) -> SecureMess
     }
 }
 
-fn decrypt_message(
-    key: &[u8; 32],
-    message: &SecureMessage,
-) -> Result<Vec<u8>, IdentityError> {
+fn decrypt_message(key: &[u8; 32], message: &SecureMessage) -> Result<Vec<u8>, IdentityError> {
     let expected = compute_mac(key, message.counter, &message.payload);
     if expected != message.mac {
         return Err(IdentityError::VerificationFailed);

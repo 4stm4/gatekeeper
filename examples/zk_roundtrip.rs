@@ -2,7 +2,7 @@
 use zk_gatekeeper::identity::entropy::DummyEntropy;
 use zk_gatekeeper::identity::init::init_identity;
 use zk_gatekeeper::identity::types::DeviceId;
-use zk_gatekeeper::zk::prover::{DeterministicSchnorrProver, ZkProver};
+use zk_gatekeeper::zk::prover::DeterministicSchnorrProver;
 use zk_gatekeeper::zk::verifier::{ChallengeTrackerConfig, Verifier};
 
 fn main() {

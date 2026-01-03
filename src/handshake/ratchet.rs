@@ -1,3 +1,5 @@
+use core::mem;
+
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
@@ -16,11 +18,20 @@ pub struct RatchetState {
     recv_count: u32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RatchetRole {
+    Initiator,
+    Responder,
+}
+
 impl RatchetState {
-    pub fn new(shared_secret: [u8; 32]) -> Self {
+    pub fn new(shared_secret: [u8; 32], role: RatchetRole) -> Self {
         let root_key = kdf(&shared_secret, LABEL_ROOT);
-        let send_chain = kdf(&root_key, LABEL_SEND);
-        let recv_chain = kdf(&root_key, LABEL_RECV);
+        let mut send_chain = kdf(&root_key, LABEL_SEND);
+        let mut recv_chain = kdf(&root_key, LABEL_RECV);
+        if matches!(role, RatchetRole::Responder) {
+            mem::swap(&mut send_chain, &mut recv_chain);
+        }
         Self {
             root_key,
             send_chain,
@@ -32,14 +43,16 @@ impl RatchetState {
 
     pub fn next_send_key(&mut self) -> [u8; 32] {
         self.send_count = self.send_count.wrapping_add(1);
+        let key = self.send_chain;
         self.send_chain = kdf(&self.send_chain, LABEL_SEND);
-        self.send_chain
+        key
     }
 
     pub fn next_recv_key(&mut self) -> [u8; 32] {
         self.recv_count = self.recv_count.wrapping_add(1);
+        let key = self.recv_chain;
         self.recv_chain = kdf(&self.recv_chain, LABEL_RECV);
-        self.recv_chain
+        key
     }
 
     pub fn root_key(&self) -> &[u8; 32] {

@@ -9,7 +9,7 @@ pub struct RootKey(pub(crate) [u8; 32]);
 #[derive(Clone)]
 pub struct UserSecret(pub(crate) [u8; 32]);
 /// Деталь устройства, участвующая в HKDF.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeviceId(pub [u8; 16]);
 
 /// Публичный ключ личности, пригодный для публикации.
@@ -18,6 +18,18 @@ pub struct UserPublicKey(pub [u8; 32]);
 /// Хэшированный идентификатор личности, используемый verifier'ом.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct IdentityIdentifier(pub [u8; 32]);
+
+impl RootKey {
+    /// Создаёт root key из заранее подготовленного массива.
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Возвращает байтовое представление.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
 
 /// Рабочее состояние личности (root, device_id, секрет).
 pub struct IdentityState {
@@ -30,6 +42,11 @@ impl IdentityState {
     /// Возвращает текущий `DeviceId`.
     pub fn device_id(&self) -> DeviceId {
         self.device_id
+    }
+
+    /// Возвращает ссылку на корневой ключ.
+    pub fn root_key(&self) -> &RootKey {
+        &self.root_key
     }
 
     /// Вычисляет публичный ключ без обращения к Flash.

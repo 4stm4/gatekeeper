@@ -33,7 +33,10 @@ impl DeterministicSchnorrProver {
         hash_with_length(&mut hasher, self.domain);
         hash_with_length(&mut hasher, challenge);
         hasher.update(secret);
-        Scalar::from_hash(hasher)
+        let digest = hasher.finalize();
+        let mut wide = [0u8; 64];
+        wide.copy_from_slice(digest.as_slice());
+        Scalar::from_bytes_mod_order_wide(&wide)
     }
 }
 
@@ -53,17 +56,18 @@ impl ZkProver for DeterministicSchnorrProver {
         }
 
         let mut secret_scalar = Scalar::from_bytes_mod_order(sk.secret.0);
-        let public_point = (&secret_scalar * &ED25519_BASEPOINT_TABLE).compress();
+        let public_point = (&secret_scalar * ED25519_BASEPOINT_TABLE).compress();
         let public_bytes = public_point.to_bytes();
 
         let mut nonce_scalar = self.derive_nonce(&sk.secret.0, challenge);
-        let commitment_point = (&nonce_scalar * &ED25519_BASEPOINT_TABLE).compress();
+        let commitment_point = (&nonce_scalar * ED25519_BASEPOINT_TABLE).compress();
         let commitment_bytes = commitment_point.to_bytes();
 
         let mut challenge_scalar =
             transcript_challenge_scalar(self.domain, challenge, &public_bytes, &commitment_bytes);
 
-        let mut response = Scalar::mul_add(challenge_scalar, secret_scalar, nonce_scalar);
+        let mut response = challenge_scalar * secret_scalar;
+        response += nonce_scalar;
         let proof = ZkProof::new(commitment_bytes, response.to_bytes());
 
         secret_scalar.zeroize();

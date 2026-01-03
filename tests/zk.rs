@@ -1,9 +1,9 @@
 use zk_gatekeeper::identity::types::{DeviceId, IdentityState, RootKey};
-use zk_gatekeeper::zk::prover::{DeterministicSchnorrProver, ZkProver};
+use zk_gatekeeper::zk::prover::DeterministicSchnorrProver;
 use zk_gatekeeper::zk::verifier::{ChallengeTracker, ChallengeTrackerConfig, Verifier};
 
 fn make_state() -> IdentityState {
-    let root = RootKey([42u8; 32]);
+    let root = RootKey::from_bytes([42u8; 32]);
     let device = DeviceId([1u8; 16]);
     IdentityState::from_root(root, device).unwrap()
 }

@@ -2,7 +2,7 @@ use zk_gatekeeper::identity::hkdf::{derive_storage_keys, derive_user_key};
 use zk_gatekeeper::identity::types::{DeviceId, RootKey};
 
 fn sample_root() -> RootKey {
-    RootKey([0x11u8; 32])
+    RootKey::from_bytes([0x11u8; 32])
 }
 
 fn sample_device() -> DeviceId {

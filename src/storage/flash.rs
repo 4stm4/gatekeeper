@@ -5,10 +5,10 @@
 //! use zk_gatekeeper::storage::flash::FlashStorage;
 //! use zk_gatekeeper::identity::types::{DeviceId, IdentityState, RootKey};
 //!
-//! let state = IdentityState::from_root(RootKey([0x11; 32]), DeviceId([1; 16])).unwrap();
+//! let state = IdentityState::from_root(RootKey::from_bytes([0x11; 32]), DeviceId([1; 16])).unwrap();
 //! let flash = FlashStorage::new();
 //! flash.seal(&state).unwrap();
-//! let restored = flash.unseal(&state.root_key).unwrap();
+//! let restored = flash.unseal(state.root_key()).unwrap();
 //! assert!(restored.identifier().matches(state.public_key().as_bytes()));
 //! ```
 use core::cmp::min;
@@ -17,6 +17,7 @@ use core::ptr;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 use crate::error::IdentityError;
 use crate::identity::hkdf::derive_storage_keys;
@@ -35,7 +36,7 @@ pub struct FlashStorage;
 
 const FLASH_BASE: usize = 0x1000_0000;
 const FLASH_SECTOR_SIZE: usize = 4096;
-const FLASH_PAGE_SIZE: usize = 256;
+pub(crate) const FLASH_PAGE_SIZE: usize = 256;
 const FLASH_STORAGE_SECTORS: usize = FLASH_STORAGE_SECTORS_CFG;
 const FLASH_STORAGE_OFFSET: usize = FLASH_STORAGE_OFFSET_CFG;
 const FLASH_STORAGE_SIZE: usize = FLASH_STORAGE_SECTORS * FLASH_SECTOR_SIZE;
@@ -187,7 +188,9 @@ impl FlashStorage {
         let mut header_bytes = record.header_bytes;
         zk_log_info!(
             "Flash unseal: slot={} epoch={} counter={}",
-            record.slot, header.epoch, header.counter
+            record.slot,
+            header.epoch,
+            header.counter
         );
 
         let mut payload = [0u8; PAYLOAD_SIZE];
@@ -203,7 +206,8 @@ impl FlashStorage {
         if !Self::timing_safe_eq(&stored_mac, &expected_mac) {
             zk_log_warn!(
                 "Flash MAC mismatch slot={} counter={}",
-                record.slot, header.counter
+                record.slot,
+                header.counter
             );
             enc_key.fill(0);
             mac_key.fill(0);

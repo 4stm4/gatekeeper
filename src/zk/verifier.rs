@@ -4,9 +4,12 @@
 //! ```
 //! use zk_gatekeeper::zk::verifier::{ChallengeTrackerConfig, Verifier};
 //! use zk_gatekeeper::identity::types::{DeviceId, IdentityState, RootKey};
-//! use zk_gatekeeper::zk::prover::{DeterministicSchnorrProver, ZkProver};
+//! use zk_gatekeeper::zk::prover::DeterministicSchnorrProver;
 //!
-//! let state = IdentityState::from_root(RootKey([7; 32]), DeviceId([1; 16])).unwrap();
+//! let state = IdentityState::from_root(
+//!     RootKey::from_bytes([7; 32]),
+//!     DeviceId([1; 16])
+//! ).unwrap();
 //! let challenge = b"demo";
 //! let mut verifier = Verifier::new(b"zk-gatekeeper-schnorr-v1", ChallengeTrackerConfig::default());
 //! verifier.tracker_mut().register(challenge, 1).unwrap();
@@ -16,7 +19,6 @@
 //! verifier.verify(&id, &pk, challenge, 2, &proof).unwrap();
 //! ```
 use alloc::collections::VecDeque;
-use alloc::vec::Vec;
 use sha2::{Digest, Sha256};
 
 use crate::error::IdentityError;

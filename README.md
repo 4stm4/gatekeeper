@@ -152,7 +152,7 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - После успешного ZK-verify устройства выполняют упрощённый Noise IK-подобный обмен на `x25519`: `handshake::initiator_start` формирует первое сообщение (эпемерный ключ + MAC), `handshake::responder_accept` проверяет MAC, генерирует ответ и вычисляет общий секрет. `initiator_finish` завершается после получения ответа. Оба шага используют лишь публичные данные (domain, capability bits) и `EntropySource` для эпемерных ключей.
 - Формат `HandshakeMessage`: `version (1)` + `capabilities (u32)` + `ephemeral public key (32 байта)` + `mac (32 байта)`. Все MAC считаются как `HMAC-SHA256(shared_secret, "gatekeeper-noise-mac" || capabilities)`, что фиксирует домен.
 - Capability Manager (`handshake::CapabilityFlags/CapabilityManager`) объявляет возможности устройства (VOICE/FILES/TEXT/VIDEO). На выходе обе стороны получают пересечение флагов (например, только VOICE). Эти флаги затем используются при инициализации каналов/функций.
-- Итоговый общий секрет поступает в `handshake::RatchetState`, который разворачивает простую Double-Ratchet обвязку: `RatchetState::new(shared_secret)` → цепочки `send/recv`, обновляемые через HKDF при каждом сообщении (`next_send_key`, `next_recv_key`). Состояние (root key + счётчики) можно сохранять во Flash наряду с другими метаданными.
+- Итоговый общий секрет поступает в `handshake::RatchetState`, который разворачивает простую Double-Ratchet обвязку: `RatchetState::new(shared_secret, RatchetRole::Initiator/Responder)` → цепочки `send/recv`, обновляемые через HKDF при каждом сообщении (`next_send_key`, `next_recv_key`). Состояние (root key + счётчики) можно сохранять во Flash наряду с другими метаданными.
 
 ## Secure storage & sync
 
@@ -229,6 +229,29 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - Workflow `.github/workflows/docs.yml` автоматически собирает `cargo doc --all-features --no-deps`, упаковывает содержимое `target/doc` и публикует его через GitHub Pages (после включения Pages в настройках репозитория).
 - `src/lib.rs` экспортирует минимальный API, дополнительные заметки предполагается хранить в `docs/`.
 
+## Docker-окружение
+
+В репозитории есть `Dockerfile`, который разворачивает минимальный образ на базе `rust:1.83-slim`, устанавливает зависимости clang/packaging и подтягивает nightly, чтобы `bindgen` и `cargo +nightly fetch` работали из коробки. Это удобно, если не хочется ставить toolchain на хост.
+
+Быстрый сценарий:
+
+```bash
+# соберите образ один раз
+docker build -t zk-gatekeeper .
+
+# запустите тесты в контейнере; по умолчанию выполняется host-таргет
+docker run --rm -v "$PWD":/work -w /work zk-gatekeeper
+```
+
+Команда запуска соответствует `CMD ["cargo", "test", "--tests", "--target", "x86_64-unknown-linux-gnu"]`. Чтобы выполнить другую цель, добавьте её в конце `docker run`:
+
+```bash
+docker run --rm -v "$PWD":/work -w /work zk-gatekeeper \
+  cargo test --target x86_64-unknown-linux-gnu --lib
+```
+
+Образ заранее прогревает `cargo fetch`, поэтому повторные прогоны не качают crates повторно.
+
 ## Примеры
 
 - `cargo run --example identity_roundtrip` — генерация личности, получение идентификатора и формирование proof.
@@ -246,3 +269,44 @@ Experimental `no_std` identity and ZK helper crate for RP2040 deployments.
 - **Статический проход:** `rustup component add llvm-tools-preview` один раз, далее `RUSTFLAGS="-Z emit-stack-sizes" cargo +nightly build --release --target thumbv6m-none-eabi`. Полученные `.stack_sizes` читаются через `llvm-readobj --stack-sizes target/thumbv6m-none-eabi/release/libzk_gatekeeper.a | sort -k4 -nr | head`, что мгновенно показывает пиковые затраты стека на каждую функцию.
 - **Runtime на железе:** `probe-run --chip RP2040 --stack 0x4000 target/thumbv6m-none-eabi/release/examples/<app>.elf` останавливает выполнение при выходе за лимит и печатает реальное потребление. Это позволяет проверять каждую сборку после линковки.
 - **Host-профилирование:** для нагрузочных сценариев используется `criterion`-бенч (описан в `docs/stack_profiling.md`), который гоняет `init_identity` и `prove()` в цикле и логирует `stacker::remaining_stack()` — так можно подбирать безопасный `probe-run --stack` порог ещё до прошивки.
+
+## Прошивка RP2040 и проверка через system_check
+
+### Сборка и прошивка платы
+
+1. Установите toolchain `xPack ARM GCC` и добавьте его в `$PATH` на время сборки:
+   ```bash
+   export PATH="$HOME/.local/toolchains/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin:$PATH"
+   ```
+2. Соберите минимальную прошивку:
+   ```bash
+   cd firmware/rp2040-basic
+   cargo build --release --target thumbv6m-none-eabi
+   ```
+3. Сконвертируйте ELF в UF2 (требуется `elf2uf2-rs` из crates.io):
+   ```bash
+   elf2uf2-rs \
+     target/thumbv6m-none-eabi/release/rp2040-basic-fw \
+     target/thumbv6m-none-eabi/release/rp2040-basic.uf2
+   ```
+4. Подключите RP2040 в режиме BOOTSEL (удерживая кнопку при подаче питания). Смонтируется флешка `RPI-RP2`. Скопируйте готовый UF2:
+   ```bash
+   cp target/thumbv6m-none-eabi/release/rp2040-basic.uf2 /Volumes/RPI-RP2/
+   ```
+   После копирования плата перезагрузится и должна начать мигать LED (пример демонстрирует `init_identity` и `FlashStorage::seal`). Если копирование зависает, извлеките и переподключите устройство и повторите шаг.
+
+### Проверка на хосте
+
+Поскольку `.cargo/config.toml` по умолчанию фиксирует `thumbv6m-none-eabi`, для host-команд всегда указывайте `--target x86_64-apple-darwin` (или другой подходящий).
+
+- Интеграционный пример, который повторяет полный сценарий (генерация личности → доказательство → Noise‑канал):
+  ```bash
+  cargo run --example system_check --target x86_64-apple-darwin
+  ```
+  В выводе появятся три «галочки»: proof проверен, capability‑флаги совпали, SecureChannel обменялся сообщениями. Это быстрый sanity-check перед прошивкой.
+
+- Полный набор тестов (unit + integration + doctest) на хосте:
+  ```bash
+  cargo test --target x86_64-apple-darwin
+  ```
+  Для embedded‑целей оставляйте `--target thumbv6m-none-eabi` и при необходимости запускайте через `probe-run` или копирование UF2, как описано выше.

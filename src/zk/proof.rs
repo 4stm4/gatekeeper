@@ -95,25 +95,26 @@ impl ZkProof {
 
         let pk_point = match CompressedEdwardsY(*public_key).decompress() {
             Some(point) if point.is_torsion_free() => point,
-            None => return false,
+            _ => return false,
         };
 
         let commitment_bytes = self.commitment();
         let commitment_point = match CompressedEdwardsY(commitment_bytes).decompress() {
             Some(point) if point.is_torsion_free() => point,
-            None => return false,
+            _ => return false,
         };
 
         let response_bytes = self.response();
-        let mut response_scalar = match Scalar::from_canonical_bytes(response_bytes) {
-            Some(scalar) => scalar,
-            None => return false,
-        };
+        let response_candidate = Scalar::from_canonical_bytes(response_bytes);
+        if response_candidate.is_none().into() {
+            return false;
+        }
+        let mut response_scalar = response_candidate.unwrap();
 
         let mut challenge_scalar =
             transcript_challenge_scalar(domain, challenge, public_key, &commitment_bytes);
 
-        let lhs = &response_scalar * &ED25519_BASEPOINT_TABLE;
+        let lhs = &response_scalar * ED25519_BASEPOINT_TABLE;
         let rhs = commitment_point + challenge_scalar * pk_point;
         let valid = lhs == rhs;
 
@@ -137,7 +138,10 @@ pub(crate) fn transcript_challenge_scalar(
     hash_with_length(&mut hasher, challenge);
     hasher.update(public_key);
     hasher.update(commitment);
-    Scalar::from_hash(hasher)
+    let digest = hasher.finalize();
+    let mut wide = [0u8; 64];
+    wide.copy_from_slice(digest.as_slice());
+    Scalar::from_bytes_mod_order_wide(&wide)
 }
 
 /// Хэширует данные с префиксом длины (16 бит little-endian).

@@ -3,7 +3,7 @@
 use zk_gatekeeper::error::IdentityError;
 use zk_gatekeeper::handshake::{
     initiator_finish, initiator_start, responder_accept, CapabilityFlags, NoiseStaticKeypair,
-    RatchetState,
+    RatchetRole, RatchetState,
 };
 use zk_gatekeeper::identity::entropy::EntropySource;
 
@@ -46,7 +46,7 @@ fn handshake_roundtrip() {
         CapabilityFlags::VOICE.bits()
     );
 
-    let mut ratchet = RatchetState::new(keys_initiator.shared_secret);
+    let mut ratchet = RatchetState::new(keys_initiator.shared_secret, RatchetRole::Initiator);
     assert_ne!(ratchet.next_send_key(), [0u8; 32]);
     assert_ne!(ratchet.next_recv_key(), [0u8; 32]);
 }

@@ -6,7 +6,7 @@ use zk_gatekeeper::storage::gate::{
 };
 
 fn state() -> IdentityState {
-    let root = RootKey([7u8; 32]);
+    let root = RootKey::from_bytes([7u8; 32]);
     let device = DeviceId([2u8; 16]);
     IdentityState::from_root(root, device).unwrap()
 }

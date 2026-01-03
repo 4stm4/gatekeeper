@@ -7,4 +7,4 @@ pub use noise::{
     initiator_finish, initiator_start, responder_accept, HandshakeKeys, HandshakeMessage,
     InitiatorState, NoiseStaticKeypair,
 };
-pub use ratchet::RatchetState;
+pub use ratchet::{RatchetRole, RatchetState};

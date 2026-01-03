@@ -1,0 +1,13 @@
+[package]
+name = "rp2040-basic-fw"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+panic-halt = "0.2.0"
+embedded-hal = "0.2.7"
+embedded-alloc = "0.5"
+rp2040-hal = { version = "0.10", features = ["rt"] }
+cortex-m-rt = "0.7"
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+zk-gatekeeper = { path = "../..", default-features = false, features = ["flash-storage", "rp2040-hal", "embedded-alloc"] }

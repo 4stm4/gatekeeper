@@ -88,11 +88,13 @@ impl NetworkStack for NullNetwork {
 
 #[cfg(feature = "network")]
 mod smoltcp_backend {
-    use alloc::vec::Vec;
+    use alloc::{vec, vec::Vec};
 
     use managed::ManagedSlice;
-    use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet};
-    use smoltcp::phy::Loopback;
+    use smoltcp::iface::{
+        Config as IfaceConfig, Interface, SocketHandle, SocketSet, SocketStorage,
+    };
+    use smoltcp::phy::{Loopback, Medium};
     use smoltcp::socket::{tcp, udp};
     use smoltcp::time::Instant;
     use smoltcp::wire::{
@@ -135,7 +137,7 @@ mod smoltcp_backend {
 
     /// Сетевой стек поверх smoltcp + Loopback (можно заменить на драйвер MAC).
     pub struct SmoltcpNetwork {
-        iface: Interface<'static, Loopback>,
+        iface: Interface,
         device: Loopback,
         sockets: SocketSet<'static>,
         udp_handle: SocketHandle,
@@ -147,7 +149,7 @@ mod smoltcp_backend {
 
     impl SmoltcpNetwork {
         pub fn new(config: NetworkConfig) -> Self {
-            let mut device = Loopback::new(config.mtu);
+            let mut device = Loopback::new(Medium::Ethernet);
             let hw_addr = EthernetAddress(config.mac);
             let mut iface_config = IfaceConfig::new(hw_addr.into());
             iface_config.random_seed = config.random_seed;
@@ -185,7 +187,7 @@ mod smoltcp_backend {
                 tcp::Socket::new(rx_buffer, tx_buffer)
             };
 
-            let mut sockets = SocketSet::new(Vec::new());
+            let mut sockets = SocketSet::new(Vec::<SocketStorage<'static>>::new());
             let udp_handle = sockets.add(udp_socket);
             let tcp_handle = sockets.add(tcp_socket);
 
@@ -222,7 +224,7 @@ mod smoltcp_backend {
             let socket = self.sockets.get_mut::<udp::Socket>(self.udp_handle);
             if !socket.is_open() {
                 socket
-                    .bind((self.udp_port).into())
+                    .bind(self.udp_port)
                     .map_err(|_| NetworkError::InvalidEndpoint)?;
             }
             socket
@@ -238,8 +240,13 @@ mod smoltcp_backend {
             let socket = self.sockets.get_mut::<udp::Socket>(self.udp_handle);
             match socket.recv_slice(buffer) {
                 Ok((len, meta)) => {
+                    #[allow(unreachable_patterns)]
                     let addr = match meta.endpoint.addr {
-                        IpAddress::Ipv4(v4) => v4.octets(),
+                        IpAddress::Ipv4(v4) => {
+                            let mut bytes = [0u8; 4];
+                            bytes.copy_from_slice(v4.as_bytes());
+                            bytes
+                        }
                         _ => return Err(NetworkError::InvalidEndpoint),
                     };
                     Ok(Some((len, NetworkEndpoint::ipv4(addr, meta.endpoint.port))))

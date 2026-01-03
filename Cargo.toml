@@ -10,16 +10,18 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { version = "1.7", default-features = false }
 x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"], optional = true }
 log = { version = "0.4", default-features = false, optional = true }
-thiserror = { version = "1.0", default-features = false }
 subtle = { version = "2.5", default-features = false }
 littlefs2 = { version = "0.6.1", default-features = false, features = ["alloc", "log-none"], optional = true }
-smoltcp = { version = "0.11.0", default-features = false, features = ["proto-ipv4", "socket-udp", "socket-tcp", "medium-ethernet"], optional = true }
+smoltcp = { version = "0.11.0", default-features = false, features = ["proto-ipv4", "socket-udp", "socket-tcp", "medium-ethernet", "alloc"], optional = true }
+managed = { version = "0.8", optional = true }
 rtic = { version = "2.1.0", optional = true }
 rp2040-hal = { version = "0.10", default-features = false, features = ["rt"], optional = true }
 embassy-executor = { version = "0.5.1", default-features = false, features = ["arch-std", "task-arena-size-1024"], optional = true }
 embassy-time = { version = "0.3.2", default-features = false, features = ["std"], optional = true }
 static_cell = { version = "2.1.0", optional = true }
 embedded-alloc = { version = "0.5", optional = true }
+delog = { version = "0.1.8", default-features = false, features = ["portable-atomic"], optional = true }
+portable-atomic = { version = "1.13", default-features = false, optional = true }
 
 # для RP2040 (позже подключается)
 # rp2040-hal = "0.10"
@@ -34,8 +36,8 @@ default = [
     "storage-gate",
     "logging",
 ]
-flash-storage = ["dep:littlefs2"]
-network = ["dep:smoltcp"]
+flash-storage = ["dep:littlefs2", "dep:delog", "dep:portable-atomic"]
+network = ["dep:smoltcp", "dep:managed"]
 contacts = []
 handshake = ["dep:x25519-dalek"]
 secure-storage = []
@@ -44,11 +46,14 @@ logging = ["dep:log"]
 embedded-alloc = ["dep:embedded-alloc"]
 rtic-demo = ["dep:rtic", "dep:rp2040-hal", "network"]
 embassy-demo = ["dep:embassy-executor", "dep:embassy-time", "dep:static_cell", "network"]
+rp2040-hal = ["dep:rp2040-hal"]
 
 [dev-dependencies]
+panic-halt = "0.2.0"
+
+[target.'cfg(not(target_arch = "thumbv6m"))'.dev-dependencies]
 criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }
 stacker = "0.1.22"
-panic-halt = "0.2.0"
 proptest = "1.4"
 
 [[bench]]

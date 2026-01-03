@@ -21,5 +21,4 @@ impl EmbeddedHeap {
         let start = buffer.as_mut_ptr() as usize;
         EMBEDDED_HEAP.init(start, buffer.len());
     }
-
 }

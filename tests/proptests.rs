@@ -10,7 +10,7 @@ proptest! {
     #[test]
     fn user_key_depends_on_device(root in any::<[u8; 32]>(), dev_a in any::<[u8; 16]>(), dev_b in any::<[u8; 16]>()) {
         prop_assume!(dev_a != dev_b);
-        let root_key = RootKey(root);
+        let root_key = RootKey::from_bytes(root);
         let k_a = derive_user_key(&root_key, &DeviceId(dev_a)).unwrap();
         let k_b = derive_user_key(&root_key, &DeviceId(dev_b)).unwrap();
         prop_assert_ne!(k_a, k_b);
@@ -20,7 +20,7 @@ proptest! {
 proptest! {
     #[test]
     fn storage_keys_remain_distinct(root in any::<[u8; 32]>(), device in any::<[u8; 16]>()) {
-        let root_key = RootKey(root);
+        let root_key = RootKey::from_bytes(root);
         let device_id = DeviceId(device);
         let (enc, mac) = derive_storage_keys(&root_key, &device_id).unwrap();
         prop_assert_ne!(enc, mac);
@@ -30,7 +30,8 @@ proptest! {
 proptest! {
     #[test]
     fn deterministic_schnorr_roundtrip(root in any::<[u8; 32]>(), device in any::<[u8; 16]>(), challenge in vec(any::<u8>(), 1..=MAX_CHALLENGE_LEN)) {
-        let state = IdentityState::from_root(RootKey(root), DeviceId(device)).unwrap();
+        let state =
+            IdentityState::from_root(RootKey::from_bytes(root), DeviceId(device)).unwrap();
         let prover = DeterministicSchnorrProver::default();
         let proof = state.prove_with(&prover, &challenge).unwrap();
         let pk = state.public_key().into_bytes();

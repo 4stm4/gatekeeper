@@ -13,6 +13,10 @@ use zeroize::Zeroize;
 use crate::error::IdentityError;
 use crate::platform::device::DeviceBindingKey;
 use crate::platform::rom;
+#[cfg(feature = "flash-storage")]
+use crate::storage::flash::FLASH_PAGE_SIZE;
+#[cfg(not(feature = "flash-storage"))]
+const FLASH_PAGE_SIZE: usize = 256;
 
 include!(concat!(env!("OUT_DIR"), "/flash_layout.rs"));
 

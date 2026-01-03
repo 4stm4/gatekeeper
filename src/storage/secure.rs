@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::convert::TryInto;
+use core::{convert::TryInto, mem};
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -33,7 +33,6 @@ pub struct ContactMetadata {
     pub trust_level: u8,
 }
 
-#[derive(Clone)]
 pub struct SecureStore {
     ratchets: Vec<RatchetStateRow>,
     contacts: Vec<ContactMetadata>,
@@ -57,7 +56,10 @@ enum WalOp {
 
 #[derive(Clone)]
 enum WalRecord {
-    UpsertRatchet { nonce: u64, ciphertext: [u8; WalRecord::RATCHET_SIZE] },
+    UpsertRatchet {
+        nonce: u64,
+        ciphertext: [u8; WalRecord::RATCHET_SIZE],
+    },
     UpsertContact(ContactMetadata),
     DeleteContact(IdentityIdentifier),
 }
@@ -65,14 +67,13 @@ enum WalRecord {
 impl WalRecord {
     const RATCHET_SIZE: usize = core::mem::size_of::<RatchetStateRow>();
 
-    fn encrypt_ratchet(
-        row: &RatchetStateRow,
-        nonce: u64,
-        cipher: &SecureCipher,
-    ) -> Self {
+    fn encrypt_ratchet(row: &RatchetStateRow, nonce: u64, cipher: &SecureCipher) -> Self {
         let mut buf = Self::encode_ratchet_bytes(row);
         cipher.xor_keystream(nonce, &mut buf);
-        Self::UpsertRatchet { nonce, ciphertext: buf }
+        Self::UpsertRatchet {
+            nonce,
+            ciphertext: buf,
+        }
     }
 
     fn decrypt_ratchet(&self, cipher: &SecureCipher) -> Option<RatchetStateRow> {
@@ -224,7 +225,9 @@ impl SecureStore {
 
     pub fn recover(&mut self) -> Result<(), IdentityError> {
         if self.wal_dirty {
-            self.apply_records(&self.wal_shadow);
+            let shadow = mem::take(&mut self.wal_shadow);
+            self.apply_records(&shadow);
+            self.wal_shadow = shadow;
             self.wal_dirty = false;
             self.clear_wal_shadow();
         }
@@ -237,7 +240,9 @@ impl SecureStore {
         }
         self.encrypt_wal_ops(&tx.records);
         self.wal_dirty = true;
-        self.apply_records(&self.wal_shadow);
+        let shadow = mem::take(&mut self.wal_shadow);
+        self.apply_records(&shadow);
+        self.wal_shadow = shadow;
         self.wal_dirty = false;
         self.clear_wal_shadow();
         Ok(())
@@ -249,15 +254,10 @@ impl SecureStore {
             match op {
                 WalOp::UpsertRatchet(row) => {
                     let nonce = self.next_wal_nonce();
-                    self.wal_shadow.push(WalRecord::encrypt_ratchet(
-                        row,
-                        nonce,
-                        &self.cipher,
-                    ));
+                    self.wal_shadow
+                        .push(WalRecord::encrypt_ratchet(row, nonce, &self.cipher));
                 }
-                WalOp::UpsertContact(meta) => {
-                    self.wal_shadow.push(WalRecord::UpsertContact(*meta))
-                }
+                WalOp::UpsertContact(meta) => self.wal_shadow.push(WalRecord::UpsertContact(*meta)),
                 WalOp::DeleteContact(id) => self.wal_shadow.push(WalRecord::DeleteContact(*id)),
             }
         }

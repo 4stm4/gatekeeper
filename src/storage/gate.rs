@@ -1,8 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::error::IdentityError;
-use crate::identity::access::IdentityState;
-use crate::identity::types::IdentityIdentifier;
+use crate::identity::types::{IdentityIdentifier, IdentityState};
 use crate::zk::proof::{ZkProof, ZK_PROOF_LEN};
 use crate::zk::prover::{DeterministicSchnorrProver, ZkProver};
 

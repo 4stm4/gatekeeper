@@ -1,6 +1,6 @@
 //! Контроллер Merkle-дерева доверенных контактов и подготовка входов для ZK.
 
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 use crate::error::IdentityError;
 use crate::identity::types::UserPublicKey;
