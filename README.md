@@ -252,6 +252,27 @@ docker run --rm -v "$PWD":/work -w /work zk-gatekeeper \
 
 Образ заранее прогревает `cargo fetch`, поэтому повторные прогоны не качают crates повторно.
 
+## CLI-утилита `gatekeeper-cli`
+
+Для работы с ключами на хосте доступен бинарь `gatekeeper-cli` (собирается при включённом флаге `cli`). Из-за дефолтного `thumbv6m`-таргета команды запускайте с явным указанием host-платформы:
+
+```bash
+# генерация нового root/device и вывод seed-фразы
+cargo run --target x86_64-apple-darwin --features cli \
+  --bin gatekeeper-cli -- generate
+
+# вывод PK/identifier по заданным hex-значениям
+cargo run --target x86_64-apple-darwin --features cli \
+  --bin gatekeeper-cli -- derive --root <hex64> --device <hex32>
+
+# получение proof для текстового challenge
+cargo run --target x86_64-apple-darwin --features cli \
+  --bin gatekeeper-cli -- prove \
+  --root <hex64> --device <hex32> --challenge "hello-world"
+```
+
+`generate` распечатывает корневой ключ (hex), DeviceId, публичный ключ, идентификатор и seed-фразу (34 слова). `derive` и `prove` используют переданные значения и всегда применяют `DeterministicSchnorrProver` с доменом `zk-gatekeeper-schnorr-v1`.
+
 ## Примеры
 
 - `cargo run --example identity_roundtrip` — генерация личности, получение идентификатора и формирование proof.

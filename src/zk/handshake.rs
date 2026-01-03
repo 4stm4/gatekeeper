@@ -102,7 +102,10 @@ pub fn accept_responder<E: EntropySource>(
 ) -> Result<(HandshakeMessage, SecureChannel), IdentityError> {
     let (response, keys) =
         responder_accept(incoming, local_static, remote_static, capabilities, entropy)?;
-    Ok((response, SecureChannel::from_keys(keys, RatchetRole::Responder)))
+    Ok((
+        response,
+        SecureChannel::from_keys(keys, RatchetRole::Responder),
+    ))
 }
 
 fn encrypt_message(key: &[u8; 32], counter: u64, plaintext: &[u8]) -> SecureMessage {
